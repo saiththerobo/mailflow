@@ -1100,6 +1100,15 @@ export class ImapManager {
             if (result.rows[0]?.is_new && !parsed.isRead) {
               newMessages.push({ ...parsed, id: result.rows[0].id, accountId: account.id, folder });
             }
+            // Propagate resolved thread_id to any earlier messages that used this
+            // message as a provisional thread root (out-of-order delivery / sync).
+            if (threadId && threadId !== msgId) {
+              await query(
+                `UPDATE messages SET thread_id = $1
+                 WHERE account_id = $2 AND thread_id = $3 AND message_id != $3`,
+                [threadId, account.id, msgId]
+              );
+            }
           } catch (parseErr) {
             console.error('Message sync parse error:', parseErr.message);
           }
@@ -1438,6 +1447,13 @@ export class ImapManager {
                   sanitizeStr(safeHtml), sanitizeStr(bodyText), JSON.stringify(atts || []),
                   bfRefs, bfThreadId,
                 ]);
+                if (bfThreadId && bfThreadId !== bfMsgId) {
+                  await query(
+                    `UPDATE messages SET thread_id = $1
+                     WHERE account_id = $2 AND thread_id = $3 AND message_id != $3`,
+                    [bfThreadId, account.id, bfMsgId]
+                  );
+                }
               } catch (parseErr) {
                 console.error('Backfill parse error:', parseErr.message);
               }

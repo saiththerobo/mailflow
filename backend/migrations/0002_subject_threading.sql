@@ -25,12 +25,33 @@ CREATE INDEX IF NOT EXISTS idx_messages_norm_subject
   ON messages(account_id, normalized_subject)
   WHERE is_deleted = false AND normalized_subject IS NOT NULL;
 
--- Retroactively re-thread existing messages that share a normalized subject but
--- ended up as singletons because their RFC 5322 headers were absent.
--- Only touches messages where thread_id = message_id (no header-based parent was
--- found at ingest time) and no in_reply_to / references are set.
--- Within each (account, normalized_subject) group, all messages are reassigned to
--- the thread_id of the earliest-dated message in the group.
+-- Fix provisional thread_ids: messages synced out of order end up with a
+-- thread_id equal to an intermediate reply's message_id rather than the true
+-- thread root.  Repeatedly walk the chain (parent.thread_id → grandparent …)
+-- until no more updates are needed, capped at 10 passes for safety.
+DO $$
+DECLARE
+  updated_count INT;
+  passes INT := 0;
+BEGIN
+  LOOP
+    UPDATE messages m
+    SET thread_id = parent.thread_id
+    FROM messages parent
+    WHERE m.account_id = parent.account_id
+      AND m.thread_id  = parent.message_id
+      AND m.thread_id IS DISTINCT FROM parent.thread_id
+      AND parent.thread_id IS NOT NULL;
+
+    GET DIAGNOSTICS updated_count = ROW_COUNT;
+    EXIT WHEN updated_count = 0 OR passes >= 10;
+    passes := passes + 1;
+  END LOOP;
+END;
+$$;
+
+-- Retroactively group remaining singletons (no RFC 5322 headers at all) by
+-- normalized subject — same logic as the forward-path fallback in computeThreadId.
 WITH rethreaded AS (
   SELECT
     id,
