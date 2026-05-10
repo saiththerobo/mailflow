@@ -403,17 +403,18 @@ export default function ComposeModal() {
             >
               {accounts.map(a => {
                 const aliases = a.aliases || [];
+                const displayName = a.sender_name || a.name;
                 if (!aliases.length) {
                   return (
                     <option key={a.id} value={`account:${a.id}`} style={{ background: 'var(--bg-tertiary)' }}>
-                      {a.name} &lt;{a.email_address}&gt;
+                      {displayName} &lt;{a.email_address}&gt;
                     </option>
                   );
                 }
                 return (
                   <optgroup key={a.id} label={a.name} style={{ background: 'var(--bg-tertiary)' }}>
                     <option value={`account:${a.id}`} style={{ background: 'var(--bg-tertiary)' }}>
-                      {a.name} &lt;{a.email_address}&gt;
+                      {displayName} &lt;{a.email_address}&gt;
                     </option>
                     {aliases.map(alias => (
                       <option key={alias.id} value={`alias:${alias.id}:${a.id}`} style={{ background: 'var(--bg-tertiary)' }}>
@@ -776,17 +777,18 @@ export default function ComposeModal() {
           >
             {accounts.map(a => {
               const aliases = a.aliases || [];
+              const displayName = a.sender_name || a.name;
               if (!aliases.length) {
                 return (
                   <option key={a.id} value={`account:${a.id}`} style={{ background: 'var(--bg-tertiary)' }}>
-                    {a.name} &lt;{a.email_address}&gt;
+                    {displayName} &lt;{a.email_address}&gt;
                   </option>
                 );
               }
               return (
                 <optgroup key={a.id} label={a.name} style={{ background: 'var(--bg-tertiary)' }}>
                   <option value={`account:${a.id}`} style={{ background: 'var(--bg-tertiary)' }}>
-                    {a.name} &lt;{a.email_address}&gt;
+                    {displayName} &lt;{a.email_address}&gt;
                   </option>
                   {aliases.map(alias => (
                     <option key={alias.id} value={`alias:${alias.id}:${a.id}`} style={{ background: 'var(--bg-tertiary)' }}>
