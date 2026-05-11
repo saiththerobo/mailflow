@@ -3546,8 +3546,9 @@ function PrivacyTab() {
   const { blockRemoteImages, setBlockRemoteImages, imageWhitelist, setImageWhitelist, addNotification } = useStore();
   const [newAddress, setNewAddress] = useState('');
   const [newDomain,  setNewDomain]  = useState('');
+  const [saving, setSaving] = useState(false);
 
-  const addAddress = () => {
+  const addAddress = async () => {
     const val = newAddress.trim().toLowerCase();
     // Require at least one character before and after a single @
     const atIdx = val.indexOf('@');
@@ -3556,33 +3557,61 @@ function PrivacyTab() {
       ...imageWhitelist,
       addresses: [...new Set([...(imageWhitelist.addresses || []), val])],
     };
-    setImageWhitelist(updated).catch(() => {});
-    setNewAddress('');
+    setSaving(true);
+    try {
+      await setImageWhitelist(updated);
+      setNewAddress('');
+    } catch (_) {
+      addNotification({ title: t('message.whitelistFail.title'), body: t('message.whitelistFail.body') });
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const removeAddress = (addr) => {
-    setImageWhitelist({
-      ...imageWhitelist,
-      addresses: (imageWhitelist.addresses || []).filter(a => a !== addr),
-    }).catch(() => {});
+  const removeAddress = async (addr) => {
+    setSaving(true);
+    try {
+      await setImageWhitelist({
+        ...imageWhitelist,
+        addresses: (imageWhitelist.addresses || []).filter(a => a !== addr),
+      });
+    } catch (_) {
+      addNotification({ title: t('message.whitelistFail.title'), body: t('message.whitelistFail.body') });
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const addDomain = () => {
+  const addDomain = async () => {
     const val = newDomain.trim().toLowerCase().replace(/^@/, '');
     if (!val || val.includes('@')) return;
     const updated = {
       ...imageWhitelist,
       domains: [...new Set([...(imageWhitelist.domains || []), val])],
     };
-    setImageWhitelist(updated).catch(() => {});
-    setNewDomain('');
+    setSaving(true);
+    try {
+      await setImageWhitelist(updated);
+      setNewDomain('');
+    } catch (_) {
+      addNotification({ title: t('message.whitelistFail.title'), body: t('message.whitelistFail.body') });
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const removeDomain = (domain) => {
-    setImageWhitelist({
-      ...imageWhitelist,
-      domains: (imageWhitelist.domains || []).filter(d => d !== domain),
-    }).catch(() => {});
+  const removeDomain = async (domain) => {
+    setSaving(true);
+    try {
+      await setImageWhitelist({
+        ...imageWhitelist,
+        domains: (imageWhitelist.domains || []).filter(d => d !== domain),
+      });
+    } catch (_) {
+      addNotification({ title: t('message.whitelistFail.title'), body: t('message.whitelistFail.body') });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const sectionHead = { fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 };
@@ -3647,8 +3676,8 @@ function PrivacyTab() {
               {(imageWhitelist.addresses || []).map(addr => (
                 <span key={addr} style={pill}>
                   {addr}
-                  <button onClick={() => removeAddress(addr)} style={{
-                    background: 'none', border: 'none', cursor: 'pointer',
+                  <button onClick={() => removeAddress(addr)} disabled={saving} style={{
+                    background: 'none', border: 'none', cursor: saving ? 'default' : 'pointer',
                     color: 'var(--text-tertiary)', padding: 0, lineHeight: 1,
                     display: 'flex', alignItems: 'center',
                   }}>
@@ -3663,13 +3692,14 @@ function PrivacyTab() {
               <input
                 value={newAddress}
                 onChange={e => setNewAddress(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && addAddress()}
+                onKeyDown={e => e.key === 'Enter' && !saving && addAddress()}
                 placeholder={t('admin.privacy.addSenderPh')}
                 style={{ ...inputStyle, flex: 1, maxWidth: 280 }}
               />
-              <button onClick={addAddress} style={{
+              <button onClick={addAddress} disabled={saving} style={{
                 padding: '8px 14px', background: 'var(--accent)', border: 'none',
-                borderRadius: 7, color: 'white', fontSize: 13, fontWeight: 500, cursor: 'pointer',
+                borderRadius: 7, color: 'white', fontSize: 13, fontWeight: 500,
+                cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.6 : 1,
               }}>{t('common.add')}</button>
             </div>
           </div>
@@ -3687,8 +3717,8 @@ function PrivacyTab() {
               {(imageWhitelist.domains || []).map(domain => (
                 <span key={domain} style={pill}>
                   @{domain}
-                  <button onClick={() => removeDomain(domain)} style={{
-                    background: 'none', border: 'none', cursor: 'pointer',
+                  <button onClick={() => removeDomain(domain)} disabled={saving} style={{
+                    background: 'none', border: 'none', cursor: saving ? 'default' : 'pointer',
                     color: 'var(--text-tertiary)', padding: 0, lineHeight: 1,
                     display: 'flex', alignItems: 'center',
                   }}>
@@ -3703,13 +3733,14 @@ function PrivacyTab() {
               <input
                 value={newDomain}
                 onChange={e => setNewDomain(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && addDomain()}
+                onKeyDown={e => e.key === 'Enter' && !saving && addDomain()}
                 placeholder={t('admin.privacy.addDomainPh')}
                 style={{ ...inputStyle, flex: 1, maxWidth: 280 }}
               />
-              <button onClick={addDomain} style={{
+              <button onClick={addDomain} disabled={saving} style={{
                 padding: '8px 14px', background: 'var(--accent)', border: 'none',
-                borderRadius: 7, color: 'white', fontSize: 13, fontWeight: 500, cursor: 'pointer',
+                borderRadius: 7, color: 'white', fontSize: 13, fontWeight: 500,
+                cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.6 : 1,
               }}>{t('common.add')}</button>
             </div>
           </div>
