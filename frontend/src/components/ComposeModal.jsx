@@ -79,6 +79,7 @@ export default function ComposeModal() {
   const [quotedBody, setQuotedBody] = useState(() => composeData?.quotedBody || '');
   const [quotedBodyHtml] = useState(() => composeData?.quotedBodyHtml || null);
   const [showDiscardSheet, setShowDiscardSheet] = useState(false);
+  const [attachments, setAttachments] = useState([]);
 
   // Baseline values captured at open time — used to detect unsaved changes
   const initialBodyRef = useRef(composeData?.body || '');
@@ -138,6 +139,7 @@ export default function ComposeModal() {
   const [showReplyType, setShowReplyType] = useState(false);
   const replyTypeRef = useRef(null);
   const textareaRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const editor = useEditor({
     extensions: [
@@ -219,6 +221,23 @@ export default function ComposeModal() {
     return () => document.removeEventListener('mousedown', handler);
   }, [showReplyType]);
 
+  const handleFileSelect = (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    files.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const base64 = ev.target.result.split(',')[1];
+        setAttachments(prev => {
+          if (prev.some(a => a.name === file.name)) return prev;
+          return [...prev, { name: file.name, size: file.size, type: file.type, data: base64 }];
+        });
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = '';
+  };
+
   const handleKeyDown = (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault();
@@ -247,6 +266,14 @@ export default function ComposeModal() {
         ...(!plaintextEmail && quotedBodyHtml ? { quotedBodyHtml } : {}),
         inReplyTo: composeData?.inReplyTo,
         references: composeData?.references || undefined,
+        ...(attachments.length ? {
+          attachments: attachments.map(a => ({
+            filename: a.name,
+            content: a.data,
+            encoding: 'base64',
+            contentType: a.type || 'application/octet-stream',
+          })),
+        } : {}),
       });
       closeCompose();
       const sentFolder = accounts.find(a => a.id === accountId)?.folder_mappings?.sent || 'Sent';
@@ -336,6 +363,7 @@ export default function ComposeModal() {
           animation: 'sheet-enter var(--motion-normal) var(--ease-emphasized) both',
         }}
       >
+        <input ref={fileInputRef} type="file" multiple onChange={handleFileSelect} style={{ display: 'none' }} />
         {/* Header */}
         <div style={{
           display: 'flex', alignItems: 'center',
@@ -349,7 +377,8 @@ export default function ComposeModal() {
                 currentBody !== initialBodyRef.current ||
                 subject !== initialSubjectRef.current ||
                 normalizeTo(toChips) !== initialToRef.current ||
-                toInput.trim() !== '';
+                toInput.trim() !== '' ||
+                attachments.length > 0;
               if (isDirty) {
                 setShowDiscardSheet(true);
               } else {
@@ -558,7 +587,7 @@ export default function ComposeModal() {
             />
           ) : (
             <div className="tiptap-compose" style={{ flex: 1, minHeight: 200 }}>
-              <RichToolbar editor={editor} />
+              <RichToolbar editor={editor} onAttach={() => fileInputRef.current?.click()} />
               <EditorContent editor={editor} />
             </div>
           )}
@@ -596,6 +625,10 @@ export default function ComposeModal() {
                 }}
               />
             )
+          )}
+
+          {attachments.length > 0 && (
+            <AttachmentChips attachments={attachments} onRemove={i => setAttachments(prev => prev.filter((_, j) => j !== i))} mobile />
           )}
 
           {/* Error */}
@@ -716,6 +749,7 @@ export default function ComposeModal() {
         animation: 'compose-enter var(--motion-normal) var(--ease-emphasized) backwards',
       }}
     >
+      <input ref={fileInputRef} type="file" multiple onChange={handleFileSelect} style={{ display: 'none' }} />
       {/* Title bar */}
       <div style={{
         padding: '10px 14px', display: 'flex', alignItems: 'center',
@@ -909,7 +943,10 @@ export default function ComposeModal() {
       </div>
 
       {/* Toolbar — sits outside overflow container so dropdowns are never clipped */}
-      {!plaintextEmail && <RichToolbar editor={editor} />}
+      {!plaintextEmail && <RichToolbar editor={editor} onAttach={() => fileInputRef.current?.click()} />}
+      {attachments.length > 0 && (
+        <AttachmentChips attachments={attachments} onRemove={i => setAttachments(prev => prev.filter((_, j) => j !== i))} />
+      )}
 
       {/* Scrollable body area */}
       <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
@@ -995,6 +1032,22 @@ export default function ComposeModal() {
           {sending ? t('compose.sending') : t('compose.send')}
         </button>
 
+        {plaintextEmail && (
+          <button
+            type="button"
+            title="Attach file"
+            onClick={() => fileInputRef.current?.click()}
+            style={{
+              background: 'none', border: 'none', borderRadius: 5, padding: '4px 8px',
+              color: 'var(--text-tertiary)', cursor: 'pointer', display: 'flex', alignItems: 'center',
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
+            </svg>
+          </button>
+        )}
+
         {error && <span style={{ fontSize: 12, color: 'var(--red)', flex: 1 }}>{error}</span>}
 
         <button onClick={closeCompose} style={{
@@ -1043,7 +1096,7 @@ function Sep() {
   return <span style={{ width: 1, background: 'var(--border-subtle)', margin: '2px 4px', alignSelf: 'stretch' }} />;
 }
 
-function RichToolbar({ editor }) {
+function RichToolbar({ editor, onAttach }) {
   const [colorPos, setColorPos] = useState(null);
   const [emojiPos, setEmojiPos] = useState(null);
   const [linkPos, setLinkPos] = useState(null);
@@ -1162,6 +1215,15 @@ function RichToolbar({ editor }) {
           {FONTS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
         </select>
 
+        {onAttach && (
+          <button title="Attach file" onMouseDown={e => { e.preventDefault(); onAttach(); }}
+            style={{ background: 'none', border: 'none', borderRadius: 4, padding: '3px 6px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: 'var(--text-secondary)' }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
+            </svg>
+          </button>
+        )}
+
         <Sep />
 
         {tb(es.bold, 'Bold', e => { e.preventDefault(); editor.chain().focus().toggleBold().run(); }, <b>B</b>)}
@@ -1202,6 +1264,7 @@ function RichToolbar({ editor }) {
           style={{ background: 'none', border: 'none', borderRadius: 4, padding: '3px 6px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}>
           <span style={{ fontSize: 13, lineHeight: 1 }}>😀</span>
         </button>
+
       </div>
 
       {/* Popups — position:fixed so they escape any overflow clipping */}
@@ -1349,6 +1412,47 @@ function QuotedEmailFrame({ html, mobile }) {
         title="Quoted email"
         style={{ width: '1px', minWidth: '100%', border: 'none', display: 'block', height }}
       />
+    </div>
+  );
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(0)}KB`;
+  return `${(bytes / 1048576).toFixed(1)}MB`;
+}
+
+function AttachmentChips({ attachments, onRemove, mobile }) {
+  return (
+    <div style={{
+      display: 'flex', flexWrap: 'wrap', gap: 6,
+      padding: mobile ? '6px 16px' : '6px 14px',
+      borderBottom: '1px solid var(--border-subtle)',
+      flexShrink: 0,
+    }}>
+      {attachments.map((a, i) => (
+        <span key={i} style={{
+          display: 'inline-flex', alignItems: 'center', gap: 4,
+          background: 'var(--bg-tertiary)', border: '1px solid var(--border)',
+          borderRadius: 6, padding: '3px 6px 3px 8px', fontSize: 11,
+          color: 'var(--text-secondary)', maxWidth: 240,
+        }}>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0 }}>
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
+          </svg>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{a.name}</span>
+          <span style={{ color: 'var(--text-tertiary)', flexShrink: 0 }}>{formatBytes(a.size)}</span>
+          <button
+            type="button"
+            onClick={() => onRemove(i)}
+            style={{ background: 'none', border: 'none', padding: '0 0 0 2px', cursor: 'pointer', color: 'var(--text-tertiary)', display: 'flex', lineHeight: 1, flexShrink: 0 }}
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </span>
+      ))}
     </div>
   );
 }

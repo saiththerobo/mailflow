@@ -88,8 +88,18 @@ router.use(requireAuth);
 
 
 router.post('/send', async (req, res) => {
-  const { accountId, aliasId, to, cc = [], bcc = [], subject, body, bodyIsHtml = false, quotedBody, quotedBodyHtml, inReplyTo, references } = req.body;
+  const { accountId, aliasId, to, cc = [], bcc = [], subject, body, bodyIsHtml = false, quotedBody, quotedBodyHtml, inReplyTo, references, attachments } = req.body;
   if (!accountId || !to?.length) return res.status(400).json({ error: 'accountId and to required' });
+
+  if (attachments !== undefined) {
+    if (!Array.isArray(attachments)) return res.status(400).json({ error: 'attachments must be an array' });
+    const totalBytes = attachments.reduce((sum, a) => sum + (typeof a.content === 'string' ? Math.ceil(a.content.length * 0.75) : 0), 0);
+    if (totalBytes > 26_214_400) return res.status(400).json({ error: 'Total attachment size exceeds 25 MB' });
+    for (const [i, a] of attachments.entries()) {
+      if (typeof a.filename !== 'string' || !a.filename.trim()) return res.status(400).json({ error: `attachments[${i}].filename is required` });
+      if (typeof a.content !== 'string') return res.status(400).json({ error: `attachments[${i}].content must be a base64 string` });
+    }
+  }
 
   let normalizedTo, normalizedCc, normalizedBcc;
   try {
@@ -191,6 +201,13 @@ router.post('/send', async (req, res) => {
       mailOptions.inReplyTo = sanitizeHeaderValue(inReplyTo);
       // Use the full prior references chain if available; fall back to just inReplyTo.
       mailOptions.references = sanitizeHeaderValue(references || inReplyTo);
+    }
+    if (attachments?.length) {
+      mailOptions.attachments = attachments.map(a => ({
+        filename: sanitizeHeaderValue(a.filename),
+        content: Buffer.from(a.content, 'base64'),
+        contentType: typeof a.contentType === 'string' ? a.contentType : 'application/octet-stream',
+      }));
     }
 
     // OAuth providers (Gmail, Microsoft) save sent mail to IMAP automatically via their
