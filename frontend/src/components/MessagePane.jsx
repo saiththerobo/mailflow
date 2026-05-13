@@ -1174,9 +1174,6 @@ export default function MessagePane() {
                      padding doesn't push elements wider than their declared max-width. */
                   * { max-width: 100% !important; box-sizing: border-box !important; }
                   img { max-width: 100% !important; height: auto !important; }
-                  /* table-layout:auto forces column widths to reflow when the table is
-                     narrower than its declared width. */
-                  table { table-layout: auto !important; }
                   /* Force top-level wrapper tables to fill the viewport. Selectors cover
                      both the legacy body > table pattern and the mf-scale-wrapper layer. */
                   body > table, body > center > table,
