@@ -124,6 +124,9 @@ services:
     environment:
       DOMAIN: ${DOMAIN:-localhost}
       ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
     configs:
       - source: caddyfile
         target: /etc/caddy/Caddyfile
@@ -135,6 +138,8 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  caddy_data:
+  caddy_config:
 
 networks:
   mailflow:

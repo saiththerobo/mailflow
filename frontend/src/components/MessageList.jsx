@@ -1607,7 +1607,7 @@ export default function MessageList() {
                     </div>
                   ) : pickerFolders.length === 0 ? (
                     <div style={{ padding: '20px 16px', textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 12 }}>
-                      No folders found
+                      {t('contextMenu.folders.empty')}
                     </div>
                   ) : (
                     <>
@@ -1679,7 +1679,7 @@ export default function MessageList() {
                         </div>
                       ) : pickerFolders.length === 0 ? (
                         <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 13 }}>
-                          No folders found
+                          {t('contextMenu.folders.empty')}
                         </div>
                       ) : pickerFolders
                         .filter(f => f.path !== selectedFolder)
@@ -1892,7 +1892,7 @@ export default function MessageList() {
                 onMouseLeave={e => { e.target.style.borderColor = 'var(--border)'; e.target.style.color = currentPage <= 1 ? 'var(--text-tertiary)' : 'var(--text-secondary)'; }}
               >← {t('messageList.prevPage')}</button>
               <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                Page {currentPage} of {totalPages}
+                {t('messageList.pageOf', { current: currentPage, total: totalPages })}
               </span>
               <button
                 onClick={() => loadPage(currentPage + 1)}

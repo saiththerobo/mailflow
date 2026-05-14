@@ -339,10 +339,9 @@ router.get('/unread-counts', async (req, res) => {
   if (!userAccountIds.length) return res.json({ total: 0, byAccount: {} });
 
   const result = await query(`
-    SELECT account_id, COUNT(*) as count
-    FROM messages
-    WHERE account_id = ANY($1) AND is_read = false AND is_deleted = false AND folder = 'INBOX'
-    GROUP BY account_id
+    SELECT account_id, COALESCE(unread_count, 0) AS count
+    FROM folders
+    WHERE account_id = ANY($1) AND path = 'INBOX'
   `, [userAccountIds]);
 
   const byAccount = {};

@@ -114,10 +114,11 @@ MailFlow will be available on port 443 (HTTPS, self-signed certificate) and port
 | `APP_PORT` | `443` | HTTPS port |
 | `APP_HTTP_PORT` | `80` | HTTP port |
 
-**Optional — automatic HTTPS via Let's Encrypt:** set `DOMAIN` and `ACME_EMAIL` in `.env`, then start with the HTTPS overlay:
+**Optional — automatic HTTPS via Let's Encrypt:** set `DOMAIN` and `ACME_EMAIL` in `.env`, download the HTTPS overlay, then restart:
 
 ```bash
-docker compose -f docker-compose.ghcr.yml -f docker-compose.https.yml --profile https up -d
+curl -o docker-compose.https.yml https://raw.githubusercontent.com/maathimself/mailflow/main/docker-compose.https.yml
+docker compose -f docker-compose.yml -f docker-compose.https.yml --profile https up -d
 ```
 
 This adds a Caddy reverse proxy that handles certificate issuance and renewal automatically. Requires a public domain with DNS pointing at the server and ports 80/443 open.

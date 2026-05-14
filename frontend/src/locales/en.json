@@ -130,6 +130,7 @@
     "backToTop": "Back to top",
     "prevPage": "Prev",
     "nextPage": "Next",
+    "pageOf": "Page {{current}} of {{total}}",
     "loadMore": "Load more",
     "noMoreMessages": "No more messages",
     "markAllRead": "Mark all as read",

@@ -128,6 +128,7 @@
     "backToTop": "Volver arriba",
     "prevPage": "Ant.",
     "nextPage": "Sig.",
+    "pageOf": "Page {{current}} of {{total}}",
     "loadMore": "Cargar más",
     "noMoreMessages": "No hay más mensajes",
     "markAllRead": "Marcar todo como leído",

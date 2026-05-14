@@ -128,6 +128,7 @@
     "backToTop": "回到顶部",
     "prevPage": "上一页",
     "nextPage": "下一页",
+    "pageOf": "Page {{current}} of {{total}}",
     "loadMore": "加载更多",
     "noMoreMessages": "没有更多邮件了",
     "markAllRead": "全部标为已读",
