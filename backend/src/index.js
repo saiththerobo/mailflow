@@ -20,6 +20,7 @@ import totpRoutes from './routes/totp.js';
 import oidcApiRouter, { oidcBrowserRouter } from './routes/oidc.js';
 import { encryptExistingCredentials, query } from './services/db.js';
 import { runMigrations } from './services/migrations.js';
+import { reloadAuthSettings } from './services/authLimiter.js';
 import { setupWebSocket } from './services/websocket.js';
 import { ImapManager } from './services/imapManager.js';
 
@@ -134,6 +135,9 @@ setupWebSocket(wss, sessionMiddleware, imapManager);
 
 // Run pending schema migrations then start
 await runMigrations();
+
+// Load configurable auth rate limit values from DB (seeded by migration above).
+await reloadAuthSettings();
 
 // Encrypt any plaintext credentials left in the DB from before this feature was added
 await encryptExistingCredentials();

@@ -3851,6 +3851,71 @@ function SecurityTab() {
 
   const totpEnabled = user?.totpEnabled;
 
+  // Admin-only: login protection settings
+  const [maxAttempts, setMaxAttempts] = useState(10);
+  const [windowMins, setWindowMins] = useState(15);
+  const [protectionSaving, setProtectionSaving] = useState(false);
+  const [protectionSaved, setProtectionSaved] = useState(false);
+  const [protectionError, setProtectionError] = useState('');
+
+  // Admin-only: auth activity log
+  const [authEvents, setAuthEvents] = useState([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
+
+  useEffect(() => {
+    if (!user?.isAdmin) return;
+    api.admin.getSettings()
+      .then(d => {
+        if (d.settings.auth_max_attempts) setMaxAttempts(parseInt(d.settings.auth_max_attempts));
+        if (d.settings.auth_window_minutes) setWindowMins(parseInt(d.settings.auth_window_minutes));
+      })
+      .catch(console.error);
+    loadAuthEvents();
+  }, [user?.isAdmin]);
+
+  const loadAuthEvents = () => {
+    setEventsLoading(true);
+    api.admin.getAuthEvents({ limit: 100, offset: 0 })
+      .then(d => setAuthEvents(d.events))
+      .catch(console.error)
+      .finally(() => setEventsLoading(false));
+  };
+
+  const saveProtection = async () => {
+    const attempts = parseInt(maxAttempts);
+    const mins = parseInt(windowMins);
+    if (!Number.isInteger(attempts) || attempts < 1 || attempts > 100) {
+      setProtectionError(t('admin.security.maxAttempts') + ': 1–100');
+      return;
+    }
+    if (!Number.isInteger(mins) || mins < 1 || mins > 1440) {
+      setProtectionError(t('admin.security.windowMinutes') + ': 1–1440');
+      return;
+    }
+    setProtectionSaving(true);
+    setProtectionError('');
+    try {
+      await api.admin.updateSettings({ auth_max_attempts: attempts, auth_window_minutes: mins });
+      setProtectionSaved(true);
+      setTimeout(() => setProtectionSaved(false), 3000);
+    } catch (err) {
+      setProtectionError(err.message);
+    } finally {
+      setProtectionSaving(false);
+    }
+  };
+
+  const eventLabel = (type) => {
+    const map = {
+      login_success: t('admin.security.eventLoginSuccess'),
+      login_fail:    t('admin.security.eventLoginFail'),
+      totp_success:  t('admin.security.eventTotpSuccess'),
+      totp_fail:     t('admin.security.eventTotpFail'),
+      sso_login:     t('admin.security.eventSsoLogin'),
+    };
+    return map[type] || type;
+  };
+
   const startSetup = async () => {
     setLoading(true);
     setError('');
@@ -3919,6 +3984,67 @@ function SecurityTab() {
       <p style={{ margin: '0 0 28px', fontSize: 13, color: 'var(--text-tertiary)' }}>
         {t('admin.security.description')}
       </p>
+
+      {/* Login Protection — admin only */}
+      {user?.isAdmin && (
+        <div style={{
+          background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+          borderRadius: 12, padding: '20px 24px', marginBottom: 20,
+        }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>
+            {t('admin.security.loginProtectionTitle')}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 16 }}>
+            {t('admin.security.loginProtectionDesc')}
+          </div>
+          <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+            <div style={{ flex: 1 }}>
+              <label style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 5 }}>
+                {t('admin.security.maxAttempts')}
+              </label>
+              <input
+                type="number" min="1" max="100" value={maxAttempts}
+                onChange={e => setMaxAttempts(e.target.value)}
+                style={{ ...inputStyle, width: '100%' }}
+                onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+                onBlur={e => e.target.style.borderColor = 'var(--border)'}
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 5 }}>
+                {t('admin.security.windowMinutes')}
+              </label>
+              <input
+                type="number" min="1" max="1440" value={windowMins}
+                onChange={e => setWindowMins(e.target.value)}
+                style={{ ...inputStyle, width: '100%' }}
+                onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+                onBlur={e => e.target.style.borderColor = 'var(--border)'}
+              />
+            </div>
+          </div>
+          {protectionError && (
+            <div style={{ fontSize: 12, color: 'var(--red)', marginBottom: 8 }}>{protectionError}</div>
+          )}
+          <button
+            onClick={saveProtection}
+            disabled={protectionSaving}
+            style={{
+              padding: '8px 18px', background: protectionSaved ? 'rgba(34,197,94,0.15)' : 'var(--accent)',
+              border: protectionSaved ? '1px solid rgba(34,197,94,0.4)' : 'none',
+              borderRadius: 7, color: protectionSaved ? '#22c55e' : 'white',
+              fontSize: 13, fontWeight: 500,
+              cursor: protectionSaving ? 'not-allowed' : 'pointer', opacity: protectionSaving ? 0.6 : 1,
+            }}
+          >
+            {protectionSaving
+              ? t('admin.security.savingProtection')
+              : protectionSaved
+                ? t('admin.security.protectionSaved')
+                : t('admin.security.saveProtection')}
+          </button>
+        </div>
+      )}
 
       {/* Status card */}
       <div style={{
@@ -4137,6 +4263,87 @@ function SecurityTab() {
       </div>
 
       <LinkedIdentitiesSection />
+
+      {/* Activity Log — admin only */}
+      {user?.isAdmin && (
+        <div style={{ marginTop: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>
+              {t('admin.security.activityTitle')}
+            </div>
+            <button
+              onClick={loadAuthEvents}
+              disabled={eventsLoading}
+              style={{
+                padding: '5px 12px', background: 'var(--bg-tertiary)', border: '1px solid var(--border)',
+                borderRadius: 6, color: 'var(--text-secondary)', fontSize: 12,
+                cursor: eventsLoading ? 'not-allowed' : 'pointer', opacity: eventsLoading ? 0.6 : 1,
+              }}
+            >
+              {t('admin.security.activityRefresh')}
+            </button>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 12 }}>
+            {t('admin.security.activityDesc')}
+          </div>
+          {eventsLoading ? (
+            <div style={{ fontSize: 13, color: 'var(--text-tertiary)', padding: '12px 0' }}>
+              {t('admin.security.activityLoading')}
+            </div>
+          ) : authEvents.length === 0 ? (
+            <div style={{ fontSize: 13, color: 'var(--text-tertiary)', padding: '12px 0' }}>
+              {t('admin.security.activityEmpty')}
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                    {[
+                      t('admin.security.activityColTime'),
+                      t('admin.security.activityColEvent'),
+                      t('admin.security.activityColUser'),
+                      t('admin.security.activityColIP'),
+                      t('admin.security.activityColStatus'),
+                    ].map(h => (
+                      <th key={h} style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text-tertiary)', fontWeight: 500, whiteSpace: 'nowrap' }}>
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {authEvents.map(ev => (
+                    <tr key={ev.id} style={{ borderBottom: '1px solid var(--border-subtle, var(--border))' }}>
+                      <td style={{ padding: '6px 8px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                        {new Date(ev.created_at).toLocaleString()}
+                      </td>
+                      <td style={{ padding: '6px 8px', color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>
+                        {eventLabel(ev.event_type)}
+                      </td>
+                      <td style={{ padding: '6px 8px', color: 'var(--text-secondary)', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {ev.username || '—'}
+                      </td>
+                      <td style={{ padding: '6px 8px', color: 'var(--text-secondary)', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                        {ev.ip || '—'}
+                      </td>
+                      <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>
+                        <span style={{
+                          display: 'inline-block', padding: '2px 7px', borderRadius: 10, fontSize: 11, fontWeight: 500,
+                          background: ev.success ? 'rgba(34,197,94,0.12)' : 'rgba(248,113,113,0.12)',
+                          color: ev.success ? '#22c55e' : 'var(--red)',
+                        }}>
+                          {ev.success ? t('admin.security.activityAllowed') : t('admin.security.activityBlocked')}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

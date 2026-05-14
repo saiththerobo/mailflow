@@ -6,6 +6,8 @@ import { imapManager } from '../index.js';
 import { decrypt } from '../services/encryption.js';
 import { pushConfigured } from '../services/pushNotifications.js';
 import { validateHost } from '../services/hostValidation.js';
+import { authLimiterConfig } from '../services/authLimiter.js';
+import { logAuthEvent } from '../services/authEvents.js';
 
 const router = Router();
 
@@ -25,8 +27,9 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
-function rateLimit(maxRequests, windowMs) {
+function rateLimit(config) {
   return (req, res, next) => {
+    const { maxRequests, windowMs } = config;
     const key = req.ip;
     const now = Date.now();
     const bucket = rateBuckets.get(key);
@@ -42,7 +45,7 @@ function rateLimit(maxRequests, windowMs) {
     next();
   };
 }
-const authLimiter = rateLimit(10, 15 * 60 * 1000); // 10 attempts per 15 minutes per IP
+const authLimiter = rateLimit(authLimiterConfig);
 
 router.post('/register', authLimiter, async (req, res) => {
   const { username, password, inviteToken } = req.body;
@@ -169,13 +172,20 @@ router.post('/login', authLimiter, async (req, res) => {
 
     const result = await query('SELECT * FROM users WHERE username = $1', [username.toLowerCase().trim()]);
     const user = result.rows[0];
-    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+    if (!user) {
+      logAuthEvent('login_fail', { username: username.toLowerCase().trim(), ip: req.ip, success: false });
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
 
     if (!user.password_hash) {
+      logAuthEvent('login_fail', { username: user.username, userId: user.id, ip: req.ip, success: false });
       return res.status(401).json({ error: 'This account uses single sign-on. Please sign in with your SSO provider.' });
     }
     const valid = await bcrypt.compare(password, user.password_hash);
-    if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
+    if (!valid) {
+      logAuthEvent('login_fail', { username: user.username, userId: user.id, ip: req.ip, success: false });
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
 
     // Regenerate session ID before storing any auth state to prevent session fixation
     await new Promise((resolve, reject) => req.session.regenerate(err => err ? reject(err) : resolve()));
@@ -194,6 +204,7 @@ router.post('/login', authLimiter, async (req, res) => {
     // Start IMAP connections for this user
     imapManager.connectAllForUser(user.id);
 
+    logAuthEvent('login_success', { username: user.username, userId: user.id, ip: req.ip, success: true });
     res.json({ user: { id: user.id, username: user.username, displayName: user.display_name, avatar: user.avatar, isAdmin: user.is_admin, totpEnabled: user.totp_enabled } });
   } catch (err) {
     res.status(500).json({ error: 'Login failed' });
@@ -232,10 +243,12 @@ router.post('/2fa/challenge', authLimiter, async (req, res) => {
   const result = await query('SELECT * FROM users WHERE id = $1', [req.session.pendingUserId]);
   const user = result.rows[0];
   if (!user || !user.totp_secret) {
+    logAuthEvent('totp_fail', { userId: req.session.pendingUserId, ip: req.ip, success: false });
     return res.status(401).json({ error: 'Authentication failed' });
   }
 
   if (!authenticator.verify({ token: String(code).replace(/\s/g, ''), secret: decrypt(user.totp_secret) })) {
+    logAuthEvent('totp_fail', { username: user.username, userId: user.id, ip: req.ip, success: false });
     return res.status(401).json({ error: 'Invalid code' });
   }
 
@@ -246,6 +259,7 @@ router.post('/2fa/challenge', authLimiter, async (req, res) => {
   req.session.isAdmin = user.is_admin;
 
   imapManager.connectAllForUser(user.id);
+  logAuthEvent('totp_success', { username: user.username, userId: user.id, ip: req.ip, success: true });
   res.json({ user: { id: user.id, username: user.username, displayName: user.display_name, avatar: user.avatar, isAdmin: user.is_admin, totpEnabled: user.totp_enabled } });
 });
 

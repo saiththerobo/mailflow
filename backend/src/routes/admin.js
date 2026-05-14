@@ -5,6 +5,7 @@ import { query } from '../services/db.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { decrypt, encrypt } from '../services/encryption.js';
 import { validateHost, resolveForConnection } from '../services/hostValidation.js';
+import { reloadAuthSettings } from '../services/authLimiter.js';
 
 const router = Router();
 router.use(requireAdmin);
@@ -70,8 +71,22 @@ router.get('/settings', async (req, res) => {
   res.json({ settings });
 });
 
+router.get('/auth-events', async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+  const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+  const [eventsResult, countResult] = await Promise.all([
+    query(
+      `SELECT id, event_type, username, user_id, ip, success, created_at
+       FROM auth_events ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    ),
+    query('SELECT COUNT(*) AS total FROM auth_events'),
+  ]);
+  res.json({ events: eventsResult.rows, total: parseInt(countResult.rows[0].total) });
+});
+
 router.patch('/settings', async (req, res) => {
-  const { registration_open, internal_auth_disabled } = req.body;
+  const { registration_open, internal_auth_disabled, auth_max_attempts, auth_window_minutes } = req.body;
   if (typeof registration_open === 'boolean') {
     await query(
       `INSERT INTO system_settings (key, value, updated_at)
@@ -111,6 +126,29 @@ router.patch('/settings', async (req, res) => {
       [internal_auth_disabled ? 'true' : 'false']
     );
     console.log(`[admin] ${req.session.username} set internal_auth_disabled=${internal_auth_disabled}`);
+  }
+  if (auth_max_attempts != null) {
+    const val = parseInt(auth_max_attempts);
+    if (!Number.isInteger(val) || val < 1 || val > 100)
+      return res.status(400).json({ error: 'auth_max_attempts must be between 1 and 100' });
+    await query(
+      `INSERT INTO system_settings (key, value, updated_at) VALUES ('auth_max_attempts', $1, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()`,
+      [String(val)]
+    );
+  }
+  if (auth_window_minutes != null) {
+    const val = parseInt(auth_window_minutes);
+    if (!Number.isInteger(val) || val < 1 || val > 1440)
+      return res.status(400).json({ error: 'auth_window_minutes must be between 1 and 1440' });
+    await query(
+      `INSERT INTO system_settings (key, value, updated_at) VALUES ('auth_window_minutes', $1, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()`,
+      [String(val)]
+    );
+  }
+  if (auth_max_attempts != null || auth_window_minutes != null) {
+    await reloadAuthSettings();
   }
   res.json({ ok: true });
 });

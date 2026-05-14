@@ -65,6 +65,7 @@ export const api = {
     saveSystemEmail: (data) => request('POST', '/admin/system-email', data),
     testSystemEmail: () => request('POST', '/admin/system-email/test'),
     deleteSystemEmail: () => request('DELETE', '/admin/system-email'),
+    getAuthEvents: (params) => request('GET', '/admin/auth-events?' + new URLSearchParams(params)),
     oidc: {
       getProviders: () => request('GET', '/admin/oidc'),
       createProvider: (data) => request('POST', '/admin/oidc', data),
