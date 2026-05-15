@@ -428,7 +428,9 @@
       "composeRichText": "Rich Text",
       "composeRichTextDesc": "Sendet HTML — unterstützt Formatierung und gestaltete Signaturen",
       "composePlainText": "Klartext",
-      "composePlainTextDesc": "Keine HTML-Formatierung — maximale Kompatibilität"
+      "composePlainTextDesc": "Keine HTML-Formatierung — maximale Kompatibilität",
+      "hoverDelete": "Löschsymbol beim Hover anzeigen",
+      "hoverDeleteDesc": "Zeigt in Nachrichtenzeilen ein dezentes Papierkorbsymbol an, wenn sich der Mauszeiger darüber befindet"
     },
     "notifications": {
       "title": "Benachrichtigungen",

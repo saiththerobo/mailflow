@@ -424,7 +424,9 @@
       "composeRichText": "Texto enriquecido",
       "composeRichTextDesc": "Envía HTML — admite formato y firmas con estilo",
       "composePlainText": "Texto sin formato",
-      "composePlainTextDesc": "Sin formato HTML — máxima compatibilidad"
+      "composePlainTextDesc": "Sin formato HTML — máxima compatibilidad",
+      "hoverDelete": "Mostrar icono de eliminación al pasar el mouse",
+      "hoverDeleteDesc": "Mostrar un discreto icono de papelera en las filas de mensajes cuando el puntero esté sobre ellas"
     },
     "notifications": {
       "title": "Notificaciones",

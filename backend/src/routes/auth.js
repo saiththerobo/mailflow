@@ -343,7 +343,7 @@ router.patch('/preferences', async (req, res) => {
   if (!req.session.userId) return res.status(401).json({ error: 'Not authenticated' });
   const { theme, font, layout, notificationSound, pageSize, scrollMode, syncInterval,
           blockRemoteImages, imageWhitelist, shortcuts, hiddenFolders, language,
-          threadedView, plaintextEmail } = req.body;
+          threadedView, plaintextEmail, hoverDeleteEnabled } = req.body;
   // JSONB fields must be serialised to strings for the ::jsonb cast
   const imageWhitelistJson  = imageWhitelist  != null ? JSON.stringify(imageWhitelist)  : null;
   const shortcutsJson       = shortcuts       != null ? JSON.stringify(shortcuts)       : null;
@@ -365,11 +365,12 @@ router.patch('/preferences', async (req, res) => {
       || CASE WHEN $13::text IS NOT NULL THEN jsonb_build_object('language', $13::text) ELSE '{}'::jsonb END
       || CASE WHEN $14::boolean IS NOT NULL THEN jsonb_build_object('threadedView', $14::boolean) ELSE '{}'::jsonb END
       || CASE WHEN $15::boolean IS NOT NULL THEN jsonb_build_object('plaintextEmail', $15::boolean) ELSE '{}'::jsonb END
+      || CASE WHEN $16::boolean IS NOT NULL THEN jsonb_build_object('hoverDeleteEnabled', $16::boolean) ELSE '{}'::jsonb END
     WHERE id = $1
   `, [req.session.userId, theme ?? null, font ?? null, layout ?? null, notificationSound ?? null,
       pageSize ?? null, scrollMode ?? null, syncInterval ?? null,
       blockRemoteImages ?? null, imageWhitelistJson, shortcutsJson, hiddenFoldersJson,
-      language ?? null, threadedView ?? null, plaintextEmail ?? null]);
+      language ?? null, threadedView ?? null, plaintextEmail ?? null, hoverDeleteEnabled ?? null]);
 
   if (syncInterval != null) {
     const ms = parseInt(syncInterval) * 1000;

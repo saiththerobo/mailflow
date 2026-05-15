@@ -424,7 +424,9 @@
       "composeRichText": "Testo formattato",
       "composeRichTextDesc": "Invia HTML — supporta formattazione e firme stilizzate",
       "composePlainText": "Testo semplice",
-      "composePlainTextDesc": "Nessuna formattazione HTML — massima compatibilità"
+      "composePlainTextDesc": "Nessuna formattazione HTML — massima compatibilità",
+      "hoverDelete": "Mostra l'icona di eliminazione al passaggio del mouse",
+      "hoverDeleteDesc": "Mostra una piccola icona del cestino nelle righe dei messaggi quando il puntatore del mouse si trova sopra di esse"
     },
     "notifications": {
       "title": "Notifiche",

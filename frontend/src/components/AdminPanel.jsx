@@ -1148,7 +1148,7 @@ function LayoutDiagram({ layoutKey, layoutConfig, active }) {
 // ─── Layouts Tab ──────────────────────────────────────────────────────────────
 function LayoutsTab() {
   const { t } = useTranslation();
-  const { layout, setLayout, pageSize, setPageSize, scrollMode, setScrollMode, syncInterval, setSyncInterval, threadedView, setThreadedView, plaintextEmail, setPlaintextEmail } = useStore();
+  const { layout, setLayout, pageSize, setPageSize, scrollMode, setScrollMode, syncInterval, setSyncInterval, threadedView, setThreadedView, plaintextEmail, setPlaintextEmail, hoverDeleteEnabled, setHoverDeleteEnabled } = useStore();
 
   const handleSelect = (key) => {
     setLayout(key);
@@ -1274,6 +1274,34 @@ function LayoutsTab() {
               );
             })}
           </div>
+        </div>
+
+        {/* Hover delete */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginTop: 18, padding: '12px 14px', background: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)', borderRadius: 8 }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-primary)' }}>
+              {t('admin.messageList.hoverDelete')}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 3 }}>
+              {t('admin.messageList.hoverDeleteDesc')}
+            </div>
+          </div>
+          <button
+            onClick={() => setHoverDeleteEnabled(!hoverDeleteEnabled)}
+            aria-pressed={hoverDeleteEnabled}
+            title={t('admin.messageList.hoverDelete')}
+            style={{
+              width: 42, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer',
+              background: hoverDeleteEnabled ? 'var(--accent)' : 'var(--bg-tertiary)',
+              position: 'relative', transition: 'background 0.2s', flexShrink: 0,
+            }}
+          >
+            <span style={{
+              position: 'absolute', top: 3, width: 18, height: 18, borderRadius: '50%',
+              background: 'white', transition: 'left 0.2s',
+              left: hoverDeleteEnabled ? 21 : 3,
+            }} />
+          </button>
         </div>
       </div>
 

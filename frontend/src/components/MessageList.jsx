@@ -43,6 +43,7 @@ export default function MessageList() {
     setMobileSidebarOpen,
     threadedView, expandedThreadId, setExpandedThreadId,
     threadMessages, setThreadMessages, loadingThread, setLoadingThread,
+    hoverDeleteEnabled,
   } = useStore();
 
   const isMobile = useMobile();
@@ -1747,6 +1748,8 @@ export default function MessageList() {
                 isNarrow={isNarrow}
                 onThreadClick={() => handleThreadClick(message)}
                 onSelect={handleSelect}
+                onDelete={handleDelete}
+                hoverDeleteEnabled={hoverDeleteEnabled}
                 onContextMenu={(e, msg) => {
                   e.preventDefault();
                   setContextMenu({ x: e.clientX, y: e.clientY, message: msg });
@@ -1773,6 +1776,7 @@ export default function MessageList() {
               onMarkRead={handleMarkRead}
               onStar={handleStar}
               onDelete={handleDelete}
+              hoverDeleteEnabled={hoverDeleteEnabled}
               onContextMenu={(e, msg) => {
                 e.preventDefault();
                 setContextMenu({ x: e.clientX, y: e.clientY, message: msg });
@@ -2082,7 +2086,7 @@ function EmptyState({ folderSyncing, searchQuery, unreadOnly, selectedFolder, ac
   );
 }
 
-function ThreadRow({ message, isExpanded, threadMsgs, isLoadingThread, selectedMessageId, lastViewedMessageId, showAccount, isNarrow, onThreadClick, onSelect, onContextMenu, isMobile, onSwipeLeft, onSwipeRight }) {
+function ThreadRow({ message, isExpanded, threadMsgs, isLoadingThread, selectedMessageId, lastViewedMessageId, showAccount, isNarrow, onThreadClick, onSelect, onDelete, hoverDeleteEnabled, onContextMenu, isMobile, onSwipeLeft, onSwipeRight }) {
   const { t } = useTranslation();
   const [hovered, setHovered] = useState(false);
   const messageCount = message.message_count || 1;
@@ -2294,7 +2298,11 @@ function ThreadRow({ message, isExpanded, threadMsgs, isLoadingThread, selectedM
                 </span>
               )}
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, marginLeft: 8 }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, marginLeft: 8,
+              marginRight: hovered && hoverDeleteEnabled ? 20 : 0,
+              transition: 'margin-right 0.1s',
+            }}>
               {message.has_attachments && (
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" strokeWidth="2">
                   <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
@@ -2319,6 +2327,12 @@ function ThreadRow({ message, isExpanded, threadMsgs, isLoadingThread, selectedM
             {message.snippet || ''}
           </div>
         </div>
+        {hovered && hoverDeleteEnabled && (
+          <QuickDeleteBtn
+            title={t('message.delete')}
+            onClick={e => onDelete(e, message)}
+          />
+        )}
       </div>
       </div>{/* end swipe container */}
 
@@ -2383,7 +2397,7 @@ function ThreadRow({ message, isExpanded, threadMsgs, isLoadingThread, selectedM
   );
 }
 
-function MessageRow({ message, selected, lastViewed, isChecked, selectionMode, showAccount, isNarrow, onSelect, onToggleSelect, onMarkRead, onStar, onDelete, onContextMenu, isMobile, onSwipeLeft, onSwipeRight, onLongPress }) {
+function MessageRow({ message, selected, lastViewed, isChecked, selectionMode, showAccount, isNarrow, onSelect, onToggleSelect, onMarkRead, onStar, onDelete, hoverDeleteEnabled, onContextMenu, isMobile, onSwipeLeft, onSwipeRight, onLongPress }) {
   const { t } = useTranslation();
   const [hovered, setHovered] = useState(false);
   const contentRef = useRef(null);
@@ -2648,7 +2662,7 @@ function MessageRow({ message, selected, lastViewed, isChecked, selectionMode, s
               {message.from_name || message.from_email || 'Unknown'}
             </span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, marginLeft: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, marginLeft: 8, marginRight: hovered && hoverDeleteEnabled ? 20 : 0, transition: 'margin-right 0.1s' }}>
             {message.has_attachments && (
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" strokeWidth="2">
                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
@@ -2712,17 +2726,43 @@ function MessageRow({ message, selected, lastViewed, isChecked, selectionMode, s
             </svg>
           </ActionBtn>
 
-          {/* Delete */}
-          <ActionBtn title="Delete" onClick={e => onDelete(e, message)}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polyline points="3 6 5 6 21 6"/>
-              <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
-            </svg>
-          </ActionBtn>
         </div>
+      )}
+
+      {hovered && hoverDeleteEnabled && (
+        <QuickDeleteBtn
+          title={t('message.delete')}
+          onClick={e => onDelete(e, message)}
+        />
       )}
       </div>
     </div>
+  );
+}
+
+function QuickDeleteBtn({ onClick, title }) {
+  const [hov, setHov] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      onMouseEnter={() => setHov(true)}
+      onMouseLeave={() => setHov(false)}
+      style={{
+        position: 'absolute', top: 7, right: 6,
+        width: 18, height: 18, padding: 2, border: 'none', borderRadius: 4,
+        background: hov ? 'var(--bg-hover)' : 'transparent',
+        color: hov ? 'var(--red, #ef4444)' : 'var(--text-tertiary)',
+        opacity: hov ? 1 : 0.72,
+        cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        transition: 'background 0.1s, color 0.1s, opacity 0.1s',
+      }}
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <polyline points="3 6 5 6 21 6"/>
+        <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+      </svg>
+    </button>
   );
 }
 
@@ -2737,7 +2777,8 @@ function ActionBtn({ children, onClick, title }) {
       style={{
         background: hov ? 'var(--bg-hover)' : 'none',
         border: 'none', padding: '3px', borderRadius: 4,
-        color: 'var(--text-tertiary)', cursor: 'pointer',
+        color: hov ? 'var(--text-secondary)' : 'var(--text-tertiary)',
+        cursor: 'pointer',
         display: 'flex', alignItems: 'center',
         transition: 'background 0.1s, color 0.1s',
       }}

@@ -428,7 +428,9 @@
       "composeRichText": "Rich text",
       "composeRichTextDesc": "Sends HTML — supports formatting and styled signatures",
       "composePlainText": "Plain text",
-      "composePlainTextDesc": "No HTML formatting — maximum compatibility"
+      "composePlainTextDesc": "No HTML formatting — maximum compatibility",
+      "hoverDelete": "Show delete icon on hover",
+      "hoverDeleteDesc": "Show a subtle trash icon in message rows when the pointer is over them"
     },
     "notifications": {
       "title": "Notifications",

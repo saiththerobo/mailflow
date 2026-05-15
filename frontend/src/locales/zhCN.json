@@ -426,7 +426,9 @@
       "composeRichText": "富文本",
       "composeRichTextDesc": "以 HTML 形式发送 — 支持格式化与带样式的签名",
       "composePlainText": "纯文本",
-      "composePlainTextDesc": "无 HTML 格式 — 兼容性最佳"
+      "composePlainTextDesc": "无 HTML 格式 — 兼容性最佳",
+      "hoverDelete": "鼠标悬停时显示删除图标",
+      "hoverDeleteDesc": "当鼠标指针悬停在消息行上时，显示一个不显眼的垃圾桶图标"
     },
     "notifications": {
       "title": "通知",

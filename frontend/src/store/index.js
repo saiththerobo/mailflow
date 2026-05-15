@@ -193,6 +193,14 @@ export const useStore = create((set, get) => ({
     schedulePrefSave({ plaintextEmail: val });
   },
 
+  // Message list quick actions
+  hoverDeleteEnabled: localStorage.getItem('mailflow_hover_delete_enabled') !== 'false',
+  setHoverDeleteEnabled: (val) => {
+    localStorage.setItem('mailflow_hover_delete_enabled', String(val));
+    set({ hoverDeleteEnabled: val });
+    schedulePrefSave({ hoverDeleteEnabled: val });
+  },
+
   // Thread expansion cache (not persisted — reset on navigation)
   expandedThreadId: null,
   setExpandedThreadId: (id) => set({ expandedThreadId: id }),
@@ -317,6 +325,10 @@ export const useStore = create((set, get) => ({
       if (typeof prefs.plaintextEmail === 'boolean') {
         localStorage.setItem('mailflow_plaintext_email', String(prefs.plaintextEmail));
         set({ plaintextEmail: prefs.plaintextEmail });
+      }
+      if (typeof prefs.hoverDeleteEnabled === 'boolean') {
+        localStorage.setItem('mailflow_hover_delete_enabled', String(prefs.hoverDeleteEnabled));
+        set({ hoverDeleteEnabled: prefs.hoverDeleteEnabled });
       }
     } catch (_) {}
   },

@@ -424,7 +424,9 @@
       "composeRichText": "Texte enrichi",
       "composeRichTextDesc": "Envoie du HTML — prend en charge la mise en forme et les signatures stylisées",
       "composePlainText": "Texte brut",
-      "composePlainTextDesc": "Aucun formatage HTML — compatibilité maximale"
+      "composePlainTextDesc": "Aucun formatage HTML — compatibilité maximale",
+      "hoverDelete": "Afficher l'icône de suppression au survol",
+      "hoverDeleteDesc": "Afficher une icône de poubelle subtile dans les lignes de messages lorsque le pointeur est dessus"
     },
     "notifications": {
       "title": "Notifications",
