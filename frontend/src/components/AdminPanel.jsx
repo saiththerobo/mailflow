@@ -3173,6 +3173,7 @@ function ConfirmOverlay({ dialog, onClose }) {
 // ─── Language Tab ─────────────────────────────────────────────────────────────
 const LANGUAGES = [
   { code: 'en', nativeName: 'English' },
+  { code: 'de', nativeName: 'Deutsch' },
   { code: 'fr', nativeName: 'Français' },
   { code: 'es', nativeName: 'Español' },
   { code: 'it', nativeName: 'Italiano' },
