@@ -194,7 +194,7 @@ export const useStore = create((set, get) => ({
   },
 
   // Message list quick actions
-  hoverQuickActions: localStorage.getItem('mailflow_hover_quick_actions') === 'true',
+  hoverQuickActions: localStorage.getItem('mailflow_hover_quick_actions') !== 'false',
   setHoverQuickActions: (val) => {
     localStorage.setItem('mailflow_hover_quick_actions', String(val));
     set({ hoverQuickActions: val });
