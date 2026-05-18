@@ -499,6 +499,12 @@ nginx  (frontend container — internal only)
   └── backend, PostgreSQL, Redis (internal network, unchanged)
 ```
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=maathimself/mailflow&type=Date)](https://star-history.com/#maathimself/mailflow&Date)
+
+---
+
 ## Security notes
 
 - The first registered user becomes the admin automatically
