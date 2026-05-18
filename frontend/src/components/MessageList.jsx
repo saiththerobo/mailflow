@@ -8,6 +8,7 @@ import { useMobile } from '../hooks/useMobile.js';
 import ContextMenu from './ContextMenu.jsx';
 import { shortcutBus } from '../utils/shortcutBus.js';
 import { pendingMarkReadMap, completedMarkReadMap, setPending } from '../utils/pendingReads.js';
+import { applyDeleteGuard, clearDeleteGuard, clearPendingDelete, setCompletedDelete, setPendingDelete } from '../utils/pendingDeletes.js';
 
 // Folder icon for move picker
 function FolderIcon({ specialUse, size = 13 }) {
@@ -100,6 +101,7 @@ export default function MessageList() {
   // Prevents a concurrent sync refresh from reverting a pending or recently-completed
   // mark-read before the IMAP flag has propagated back to the DB.
   const applyReadGuard = useCallback((msgs) => {
+    msgs = applyDeleteGuard(msgs);
     if (pendingMarkReadMap.size === 0 && completedMarkReadMap.size === 0) return msgs;
     return msgs.map(m => {
       const inFlight = pendingMarkReadMap.has(m.id);
@@ -209,7 +211,7 @@ export default function MessageList() {
         const data = await api.getMessages(params);
         if (cancelled) return;
         setMessagesTotal(data.total);
-        setMessages(data.messages);
+        setMessages(applyReadGuard(data.messages));
         setMessagesOffset(data.messages.length);
         setHasMoreMessages(data.messages.length < data.total);
 
@@ -257,7 +259,7 @@ export default function MessageList() {
     } finally {
       setLoadingMessages(false);
     }
-  }, [selectedAccountId, selectedFolder, unreadOnly, pageSize, loadingMessages, hasMoreMessages]);
+  }, [selectedAccountId, selectedFolder, unreadOnly, pageSize, loadingMessages, hasMoreMessages, applyReadGuard]);
 
   // Listen for backfill refresh events from WebSocket
   useEffect(() => {
@@ -304,7 +306,7 @@ export default function MessageList() {
     };
     window.addEventListener('mailflow:refresh', handler);
     return () => window.removeEventListener('mailflow:refresh', handler);
-  }, [selectedAccountId, selectedFolder, unreadOnly, searchQuery]);
+  }, [selectedAccountId, selectedFolder, unreadOnly, searchQuery, applyReadGuard]);
 
   // Search
   const SEARCH_PAGE = 50;
@@ -323,7 +325,7 @@ export default function MessageList() {
       try {
         const data = await api.search(searchQuery, selectedAccountId || undefined, { offset: 0 });
         if (searchSeq.current !== seq) return;
-        setSearchResults(data.messages);
+        setSearchResults(applyReadGuard(data.messages));
         setSearchHasMore(data.messages.length === SEARCH_PAGE);
       } catch (err) {
         if (searchSeq.current === seq) console.error('Search failed:', err);
@@ -332,7 +334,7 @@ export default function MessageList() {
       }
     }, 300);
     return () => clearTimeout(searchTimer.current);
-  }, [searchQuery, selectedAccountId]);
+  }, [searchQuery, selectedAccountId, applyReadGuard]);
 
   const loadMoreSearch = useCallback(async () => {
     if (searchLoadingMore) return;
@@ -351,7 +353,7 @@ export default function MessageList() {
     } finally {
       setSearchLoadingMore(false);
     }
-  }, [searchQuery, selectedAccountId, searchLoadingMore]);
+  }, [searchQuery, selectedAccountId, searchLoadingMore, applyReadGuard]);
 
   // Infinite scroll + scroll-to-top visibility
   const handleScroll = useCallback(() => {
@@ -391,7 +393,7 @@ export default function MessageList() {
     } finally {
       setLoadingMessages(false);
     }
-  }, [selectedAccountId, selectedFolder, unreadOnly, pageSize, loadingMessages]);
+  }, [selectedAccountId, selectedFolder, unreadOnly, pageSize, loadingMessages, threadedView, applyReadGuard]);
 
   const handleSync = async () => {
     if (syncing) return;
@@ -611,6 +613,7 @@ export default function MessageList() {
 
     const ids = [...new Set(deleteMessages.map(msg => msg.id).filter(Boolean))];
     const visibleMessage = message;
+    ids.forEach((id) => setPendingDelete(id));
     removeMessage(visibleMessage.id);
     if (expandedThreadId === tid) setExpandedThreadId(null);
 
@@ -625,10 +628,13 @@ export default function MessageList() {
       try {
         if (ids.length > 1) {
           await api.bulkDelete(ids);
+          ids.forEach((id) => setCompletedDelete(id));
         } else {
           await api.deleteMessage(ids[0] || visibleMessage.id);
+          ids.forEach((id) => setCompletedDelete(id));
         }
       } catch {
+        ids.forEach((id) => clearDeleteGuard(id));
         addNotification({
           type: 'error',
           title: ids.length > 1 ? t('messageList.bulkDeleted.failTitle') : t('messageList.deleted.failTitle'),
@@ -645,6 +651,7 @@ export default function MessageList() {
         if (!pending) return;
         clearTimeout(pending.timer);
         pendingDeleteTimers.current.delete(key);
+        ids.forEach((id) => clearPendingDelete(id));
         const state = useStore.getState();
         state.setMessages([...state.messages, visibleMessage].sort((a, b) => new Date(b.date) - new Date(a.date)));
         if (unreadDelta > 0) incrementUnread(message.account_id, unreadDelta);
@@ -662,8 +669,14 @@ export default function MessageList() {
   useEffect(() => () => {
     pendingDeleteTimers.current.forEach(({ timer, message, ids }) => {
       clearTimeout(timer);
-      if (ids?.length > 1) api.bulkDelete(ids).catch(() => {});
-      else api.deleteMessage(ids?.[0] || message.id).catch(() => {});
+      const deleteIds = ids?.length ? ids : [message.id];
+      const deletePromise =
+        deleteIds.length > 1
+          ? api.bulkDelete(deleteIds)
+          : api.deleteMessage(deleteIds[0]);
+      deletePromise
+        .then(() => { deleteIds.forEach((id) => setCompletedDelete(id)); })
+        .catch(() => { deleteIds.forEach((id) => clearDeleteGuard(id)); });
     });
   }, []);
 
@@ -752,6 +765,7 @@ export default function MessageList() {
   }, []);
 
   const handleBulkDelete = useCallback((ids, msgs) => {
+    ids.forEach(id => setPendingDelete(id));
     ids.forEach(id => removeMessage(id));
     msgs.forEach(msg => { if (!msg.is_read) decrementUnread(msg.account_id); });
     setSelectedIds(new Set());
@@ -761,8 +775,10 @@ export default function MessageList() {
       if (undone) return;
       try {
         await api.bulkDelete(ids);
+        ids.forEach(id => setCompletedDelete(id));
       } catch (err) {
         console.error('Bulk delete failed:', err);
+        ids.forEach(id => clearDeleteGuard(id));
         addNotification({ title: t('messageList.bulkDeleted.failTitle'), body: t('messageList.bulkDeleted.failBody', { count: ids.length }) });
       }
     }, 4500);
@@ -772,6 +788,7 @@ export default function MessageList() {
       onUndo: () => {
         undone = true;
         clearTimeout(timer);
+        ids.forEach(id => clearPendingDelete(id));
         const state = useStore.getState();
         state.setMessages([...state.messages, ...msgs].sort((a, b) => new Date(b.date) - new Date(a.date)));
         msgs.forEach(msg => { if (!msg.is_read) incrementUnread(msg.account_id); });
