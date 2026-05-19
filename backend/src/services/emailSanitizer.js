@@ -84,12 +84,41 @@ function upgradeStyleBlocks(html) {
   });
 }
 
+// Strip dark-mode CSS from a <style> block's text content.
+// Targets @media (prefers-color-scheme: dark) blocks, Outlook dark-mode attribute
+// selectors, and properties that invert or override the forced-light background.
+function stripDarkModeCss(css) {
+  // Remove @media (prefers-color-scheme: dark) { ... } blocks.
+  // Pattern handles one level of brace nesting (sufficient for email CSS).
+  let out = css.replace(
+    /@media\b[^{]*prefers-color-scheme\s*:\s*dark[^{]*\{(?:[^{}]|\{[^{}]*\})*\}/gi,
+    ''
+  );
+  // Remove rules scoped to Outlook dark-mode attribute selectors
+  // (e.g. [data-ogsc], [data-ogsb]).
+  out = out.replace(/\[[^\]]*data-og[^\]]*\][^{]*\{[^}]*\}/gi, '');
+  // Strip color-scheme declarations — the iframe meta tag controls this instead.
+  out = out.replace(/\bcolor-scheme\s*:[^;!}]+;?/gi, '');
+  // Strip filter:invert(...) — used to simulate dark mode by inverting the page,
+  // which breaks rendering on our forced-white background.
+  out = out.replace(/\bfilter\s*:\s*invert\([^)]*\)[^;]*;?/gi, '');
+  return out;
+}
+
+function stripDarkModeStyleBlocks(html) {
+  if (!html) return html;
+  return html.replace(
+    /(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi,
+    (_, open, content, close) => open + stripDarkModeCss(content) + close
+  );
+}
+
 // Sanitize HTML email body — permissive but safe.
 export function sanitizeEmail(html) {
   const sanitized = sanitizeHtml(stripEmailHead(html), {
     allowVulnerableTags: true,
     allowedTags: [
-      'html','head','body','div','span','p','br','hr',
+      'div','span','p','br','hr',
       'h1','h2','h3','h4','h5','h6',
       'ul','ol','li','dl','dt','dd',
       'table','thead','tbody','tfoot','tr','th','td','caption','colgroup','col',
@@ -164,7 +193,8 @@ export function sanitizeEmail(html) {
 
   // Upgrade http:// URLs in <style> block CSS content — sanitize-html's transformTags
   // only handles attributes, so CSS url() inside <style> blocks must be fixed afterward.
-  return upgradeStyleBlocks(sanitized);
+  // Then strip dark-mode CSS that would override the forced-light rendering environment.
+  return stripDarkModeStyleBlocks(upgradeStyleBlocks(sanitized));
 }
 
 // Sanitize user-authored signature HTML — allows common formatting and images

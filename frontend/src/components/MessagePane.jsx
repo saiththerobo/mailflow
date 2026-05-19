@@ -1192,10 +1192,6 @@ export default function MessagePane() {
                          font-family: -apple-system, Arial, sans-serif;
                          font-size: 14px; line-height: 1.6; color: #1a1a1a;
                          word-wrap: break-word; overflow-wrap: break-word; }
-                  /* Constrain every element — covers tables, divs, images, and any
-                     other fixed-width container an email might use. box-sizing ensures
-                     padding doesn't push elements wider than their declared max-width. */
-                  * { max-width: 100% !important; box-sizing: border-box !important; }
                   img { max-width: 100% !important; height: auto !important; }
                   /* Force top-level wrapper tables to fill the viewport. Selectors cover
                      both the legacy body > table pattern and the mf-scale-wrapper layer. */
