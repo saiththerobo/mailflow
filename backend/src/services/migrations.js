@@ -51,7 +51,18 @@ export async function runMigrations() {
       const noTransaction = /^--\s*no-transaction\b/im.test(sql);
 
       if (noTransaction) {
-        await client.query(sql);
+        // Execute each statement individually. Sending a multi-statement string
+        // as one client.query() call causes pg to use PostgreSQL's simple query
+        // protocol, which wraps all statements in a single implicit transaction —
+        // blocking CONCURRENTLY operations. Running them one at a time avoids this.
+        const statements = sql
+          .replace(/--[^\n]*/g, '')  // strip single-line comments
+          .split(';')
+          .map(s => s.trim())
+          .filter(Boolean);
+        for (const stmt of statements) {
+          await client.query(stmt);
+        }
         await client.query(
           'INSERT INTO schema_migrations (version) VALUES ($1)',
           [version],
