@@ -1718,7 +1718,7 @@ export default function MessageList() {
         <div
           ref={listRef}
           onScroll={handleScroll}
-          style={{ height: '100%', overflow: 'auto' }}
+          style={{ height: '100%', overflowY: 'auto', overflowX: 'hidden' }}
         >
           {/* Pull-to-refresh indicator */}
           {isMobile && (
@@ -1820,13 +1820,12 @@ export default function MessageList() {
               title={t('messageList.archiveSelected')}
               onClick={() => handleBulkArchive([...selectedIds], selectedMsgs)}
             >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <rect x="2" y="3" width="20" height="5" rx="1"/>
                 <path d="M4 8v11a1 1 0 001 1h14a1 1 0 001-1V8"/>
                 <polyline points="9 13 12 16 15 13"/>
                 <line x1="12" y1="11" x2="12" y2="16"/>
               </svg>
-              {t('messageList.archiveSelected')}
             </BulkBtn>
 
             {/* Delete button */}
@@ -1835,11 +1834,10 @@ export default function MessageList() {
               onClick={() => handleBulkDelete([...selectedIds], selectedMsgs)}
               danger
             >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <polyline points="3 6 5 6 21 6"/>
                 <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
               </svg>
-              {t('messageList.deleteSelected')}
             </BulkBtn>
 
             {/* Move button + folder picker */}
@@ -1849,10 +1847,9 @@ export default function MessageList() {
                 onClick={() => handleOpenFolderPicker(selectedMsgs)}
                 disabled={!canMove}
               >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
                 </svg>
-                {t('messageList.moveToFolder')}
               </BulkBtn>
 
               {showFolderPicker && !isMobile && (
@@ -2025,8 +2022,8 @@ export default function MessageList() {
                 isMobile={isMobile}
                 swipeLeftAction={swipeLeftAction}
                 swipeRightAction={swipeRightAction}
-                onSwipeLeft={swipeLeftAction === 'disabled' ? undefined : (msg) => runSwipeAction(swipeLeftAction, msg)}
-                onSwipeRight={swipeRightAction === 'disabled' ? undefined : (msg) => runSwipeAction(swipeRightAction, msg)}
+                onSwipeLeft={selectionMode || swipeLeftAction === 'disabled' ? undefined : (msg) => runSwipeAction(swipeLeftAction, msg)}
+                onSwipeRight={selectionMode || swipeRightAction === 'disabled' ? undefined : (msg) => runSwipeAction(swipeRightAction, msg)}
               />
             );
           })
@@ -2057,8 +2054,8 @@ export default function MessageList() {
                 isMobile={isMobile}
                 swipeLeftAction={swipeLeftAction}
                 swipeRightAction={swipeRightAction}
-                onSwipeLeft={swipeLeftAction === 'disabled' ? undefined : (msg) => runSwipeAction(swipeLeftAction, msg)}
-                onSwipeRight={swipeRightAction === 'disabled' ? undefined : (msg) => runSwipeAction(swipeRightAction, msg)}
+                onSwipeLeft={selectionMode || swipeLeftAction === 'disabled' ? undefined : (msg) => runSwipeAction(swipeLeftAction, msg)}
+                onSwipeRight={selectionMode || swipeRightAction === 'disabled' ? undefined : (msg) => runSwipeAction(swipeRightAction, msg)}
                 onLongPress={isMobile ? (id) => { setSelectionModeActive(true); toggleSelect(id); } : undefined}
               />
             );
@@ -2546,6 +2543,11 @@ function ThreadRow({ message, isExpanded, threadMsgs, isLoadingThread, selectedM
       el.removeEventListener('touchmove', onMove);
       el.removeEventListener('touchend', onEnd);
       el.removeEventListener('touchcancel', springBack);
+      el.style.transform = 'translateX(0)';
+      el.style.transition = '';
+      el.style.boxShadow = '';
+      if (swipeBgLeftRef.current)  swipeBgLeftRef.current.style.display = 'none';
+      if (swipeBgRightRef.current) swipeBgRightRef.current.style.display = 'none';
     };
   }, [isMobile, message, onSwipeLeft, onSwipeRight, springBack]);
 
@@ -2890,6 +2892,11 @@ function MessageRow({ message, selected, lastViewed, isChecked, selectionMode, s
       el.removeEventListener('touchmove', onMove);
       el.removeEventListener('touchend', onEnd);
       el.removeEventListener('touchcancel', onCancel);
+      el.style.transform = 'translateX(0)';
+      el.style.transition = '';
+      el.style.boxShadow = '';
+      if (swipeBgLeftRef.current)  swipeBgLeftRef.current.style.display = 'none';
+      if (swipeBgRightRef.current) swipeBgRightRef.current.style.display = 'none';
     };
   }, [isMobile, message, onSwipeLeft, onSwipeRight, onLongPress, springBack]);
 
@@ -3127,15 +3134,14 @@ function BulkBtn({ children, onClick, title, disabled, danger }) {
       onMouseEnter={() => { if (!disabled) setHov(true); }}
       onMouseLeave={() => setHov(false)}
       style={{
-        display: 'flex', alignItems: 'center', gap: 5,
-        padding: '4px 10px', borderRadius: 6, fontSize: 12, fontWeight: 500,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: '5px 7px', borderRadius: 6,
         cursor: disabled ? 'not-allowed' : 'pointer',
         border: `1px solid ${hov && !disabled ? (danger ? 'var(--red, #ef4444)' : 'var(--accent)') : 'var(--border)'}`,
         background: hov && !disabled ? (danger ? 'rgba(239,68,68,0.1)' : 'var(--accent-dim)') : 'var(--bg-tertiary)',
         color: disabled ? 'var(--text-tertiary)' : (hov && danger ? 'var(--red, #ef4444)' : (hov ? 'var(--accent)' : 'var(--text-secondary)')),
         opacity: disabled ? 0.5 : 1,
         transition: 'all 0.15s',
-        whiteSpace: 'nowrap',
         flexShrink: 0,
       }}
     >
