@@ -1186,7 +1186,7 @@ export default function MessagePane() {
                   /* Injected AFTER email HTML so our rules win the source-order tiebreak
                      for same-specificity !important declarations inside the email's own
                      <style> blocks (which land in <body> after the email HTML). */
-                  html, body { height: auto !important; min-height: 0 !important; overflow-x: hidden !important; }
+                  html, body { height: auto !important; min-height: 0 !important; overflow: hidden !important; }
                   body { margin: 0 !important; padding: 0 !important;
                          background-color: #ffffff !important; color-scheme: light;
                          font-family: -apple-system, Arial, sans-serif;
