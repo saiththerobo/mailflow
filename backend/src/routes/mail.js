@@ -898,6 +898,24 @@ router.post('/messages/bulk-delete', async (req, res) => {
       }
       const withNewUid = trashMoveSucceeded.filter(u => u.newUid);
       if (withNewUid.length) {
+        // Remove any stale DB rows already sitting at (account_id, trashPath, newUid).
+        // Moved messages still carry their source UID at this point, so they cannot
+        // match the destination-folder/new-UID condition; the id exclusion is a
+        // belt-and-suspenders guard for the degenerate uid==new_uid case.
+        await query(
+          `DELETE FROM messages
+           WHERE (account_id, folder, uid) IN (
+             SELECT v.acct, v.dest, v.uid
+             FROM unnest($1::uuid[], $2::text[], $3::bigint[]) AS v(acct, dest, uid)
+           )
+           AND id != ANY($4::uuid[])`,
+          [
+            withNewUid.map(u => u.msg.account_id),
+            withNewUid.map(u => u.trashPath),
+            withNewUid.map(u => u.newUid),
+            withNewUid.map(u => u.msg.id),
+          ]
+        );
         await query(
           `UPDATE messages SET uid = v.new_uid
            FROM unnest($1::uuid[], $2::bigint[]) AS v(id, new_uid)
@@ -1012,6 +1030,21 @@ router.post('/messages/bulk-move', async (req, res) => {
     if (movedIds.length > 0) {
       await query('UPDATE messages SET folder = $1 WHERE id = ANY($2::uuid[])', [folder, movedIds]);
       if (uidUpdates.length > 0) {
+        const idToAccount = new Map(owned.map(m => [m.id, m.account_id]));
+        await query(
+          `DELETE FROM messages
+           WHERE (account_id, folder, uid) IN (
+             SELECT v.acct, v.dest, v.uid
+             FROM unnest($1::uuid[], $2::text[], $3::bigint[]) AS v(acct, dest, uid)
+           )
+           AND id != ANY($4::uuid[])`,
+          [
+            uidUpdates.map(u => idToAccount.get(u.id)),
+            uidUpdates.map(() => folder),
+            uidUpdates.map(u => u.newUid),
+            uidUpdates.map(u => u.id),
+          ]
+        );
         await query(
           `UPDATE messages SET uid = v.new_uid
            FROM unnest($1::uuid[], $2::bigint[]) AS v(id, new_uid)
@@ -1108,11 +1141,26 @@ router.post('/messages/bulk-archive', async (req, res) => {
       if (!byFolder[folder]) byFolder[folder] = [];
       byFolder[folder].push({ id, newUid });
     }
+    const idToAccount = new Map(owned.map(m => [m.id, m.account_id]));
     for (const [folder, entries] of Object.entries(byFolder)) {
       const folderIds = entries.map(e => e.id);
       await query('UPDATE messages SET folder = $1 WHERE id = ANY($2::uuid[])', [folder, folderIds]);
       const withNewUid = entries.filter(e => e.newUid != null);
       if (withNewUid.length > 0) {
+        await query(
+          `DELETE FROM messages
+           WHERE (account_id, folder, uid) IN (
+             SELECT v.acct, v.dest, v.uid
+             FROM unnest($1::uuid[], $2::text[], $3::bigint[]) AS v(acct, dest, uid)
+           )
+           AND id != ANY($4::uuid[])`,
+          [
+            withNewUid.map(e => idToAccount.get(e.id)),
+            withNewUid.map(() => folder),
+            withNewUid.map(e => e.newUid),
+            withNewUid.map(e => e.id),
+          ]
+        );
         await query(
           `UPDATE messages SET uid = v.new_uid
            FROM unnest($1::uuid[], $2::bigint[]) AS v(id, new_uid)
