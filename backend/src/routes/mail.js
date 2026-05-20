@@ -804,107 +804,112 @@ router.post('/messages/bulk-delete', async (req, res) => {
     return res.status(400).json({ error: 'Invalid message id format' });
   }
 
-  const result = await query(
-    `SELECT m.*, a.user_id FROM messages m
-     JOIN email_accounts a ON m.account_id = a.id
-     WHERE m.id = ANY($2::uuid[]) AND a.user_id = $1`,
-    [req.session.userId, ids]
-  );
-
-  const owned = result.rows;
-  if (!owned.length) return res.json({ ok: true, deleted: [] });
-
-  // Group by account, attempt IMAP moves concurrently, then only update DB for successes.
-  const byAccount = {};
-  for (const msg of owned) {
-    (byAccount[msg.account_id] = byAccount[msg.account_id] || []).push(msg);
-  }
-
-  // Messages moved to a Trash folder: update folder + uid so they appear in Trash immediately.
-  // Messages on accounts with no Trash folder: mark is_deleted so they are hidden (no dest to show).
-  const succeededNoTrash = [];
-  const trashUpdates = []; // { id, accountId, trashPath, newUid }
-  const trashPathByAccount = {};
-  for (const [accountId, msgs] of Object.entries(byAccount)) {
-    const trash = await query(
-      `SELECT path FROM folders WHERE account_id = $1 AND (special_use = '\\Trash' OR lower(name) LIKE '%trash%') LIMIT 1`,
-      [accountId]
+  try {
+    const result = await query(
+      `SELECT m.*, a.user_id FROM messages m
+       JOIN email_accounts a ON m.account_id = a.id
+       WHERE m.id = ANY($2::uuid[]) AND a.user_id = $1`,
+      [req.session.userId, ids]
     );
-    if (!trash.rows.length) {
-      succeededNoTrash.push(...msgs.map(m => m.id));
-      continue;
-    }
-    const trashPath = trash.rows[0].path;
-    trashPathByAccount[accountId] = trashPath;
-    const accountResult = await query('SELECT * FROM email_accounts WHERE id = $1', [accountId]);
-    const account = accountResult.rows[0];
-    const results = await runInBatches(
-      msgs, 10,
-      msg => imapManager.moveMessage(account, msg.uid, msg.folder, trashPath)
-    );
-    results.forEach((r, i) => {
-      if (r.status === 'fulfilled') {
-        trashUpdates.push({ id: msgs[i].id, accountId, trashPath, newUid: r.value ?? null });
-      } else {
-        console.error(`bulk-delete IMAP move ${msgs[i].id}:`, r.reason.message);
-      }
-    });
-  }
 
-  // Persist no-trash deletions
-  if (succeededNoTrash.length) {
-    await query('UPDATE messages SET is_deleted = true WHERE id = ANY($1::uuid[])', [succeededNoTrash]);
-  }
+    const owned = result.rows;
+    if (!owned.length) return res.json({ ok: true, deleted: [] });
 
-  // Persist trash moves: update folder per destination path, then update UIDs
-  if (trashUpdates.length) {
-    const byTrashPath = {};
-    for (const u of trashUpdates) {
-      (byTrashPath[u.trashPath] = byTrashPath[u.trashPath] || []).push(u);
-    }
-    for (const [trashPath, entries] of Object.entries(byTrashPath)) {
-      await query(
-        'UPDATE messages SET folder = $1 WHERE id = ANY($2::uuid[])',
-        [trashPath, entries.map(e => e.id)]
-      );
-    }
-    const withNewUid = trashUpdates.filter(u => u.newUid != null);
-    if (withNewUid.length) {
-      await query(
-        `UPDATE messages SET uid = v.new_uid
-         FROM unnest($1::uuid[], $2::bigint[]) AS v(id, new_uid)
-         WHERE messages.id = v.id`,
-        [withNewUid.map(u => u.id), withNewUid.map(u => u.newUid)]
-      );
-    }
-  }
-
-  const allSucceeded = [...succeededNoTrash, ...trashUpdates.map(u => u.id)];
-  if (allSucceeded.length) {
-    const succeededSet = new Set(allSucceeded);
-    const srcTotals = {};
-    const trashTotals = {};
+    // Group by account, attempt IMAP moves concurrently, then only update DB for successes.
+    const byAccount = {};
     for (const msg of owned) {
-      if (!succeededSet.has(msg.id)) continue;
-      const key = `${msg.account_id}:${msg.folder}`;
-      if (!srcTotals[key]) srcTotals[key] = { accountId: msg.account_id, path: msg.folder, total: 0, unread: 0 };
-      srcTotals[key].total++;
-      if (!msg.is_read) srcTotals[key].unread++;
-      const trashPath = trashPathByAccount[msg.account_id];
-      if (trashPath && trashPath !== msg.folder) {
-        if (!trashTotals[msg.account_id]) trashTotals[msg.account_id] = { path: trashPath, total: 0, unread: 0 };
-        trashTotals[msg.account_id].total++;
-        if (!msg.is_read) trashTotals[msg.account_id].unread++;
+      (byAccount[msg.account_id] = byAccount[msg.account_id] || []).push(msg);
+    }
+
+    // Messages moved to a Trash folder: update folder + uid so they appear in Trash immediately.
+    // Messages on accounts with no Trash folder: mark is_deleted so they are hidden (no dest to show).
+    const succeededNoTrash = [];
+    const trashUpdates = []; // { id, accountId, trashPath, newUid }
+    const trashPathByAccount = {};
+    for (const [accountId, msgs] of Object.entries(byAccount)) {
+      const trash = await query(
+        `SELECT path FROM folders WHERE account_id = $1 AND (special_use = '\\Trash' OR lower(name) LIKE '%trash%') LIMIT 1`,
+        [accountId]
+      );
+      if (!trash.rows.length) {
+        succeededNoTrash.push(...msgs.map(m => m.id));
+        continue;
+      }
+      const trashPath = trash.rows[0].path;
+      trashPathByAccount[accountId] = trashPath;
+      const accountResult = await query('SELECT * FROM email_accounts WHERE id = $1', [accountId]);
+      const account = accountResult.rows[0];
+      const results = await runInBatches(
+        msgs, 3,
+        msg => imapManager.moveMessage(account, msg.uid, msg.folder, trashPath)
+      );
+      results.forEach((r, i) => {
+        if (r.status === 'fulfilled') {
+          trashUpdates.push({ id: msgs[i].id, accountId, trashPath, newUid: r.value || null });
+        } else {
+          console.error(`bulk-delete IMAP move ${msgs[i].id}:`, r.reason.message);
+        }
+      });
+    }
+
+    // Persist no-trash deletions
+    if (succeededNoTrash.length) {
+      await query('UPDATE messages SET is_deleted = true WHERE id = ANY($1::uuid[])', [succeededNoTrash]);
+    }
+
+    // Persist trash moves: update folder per destination path, then update UIDs
+    if (trashUpdates.length) {
+      const byTrashPath = {};
+      for (const u of trashUpdates) {
+        (byTrashPath[u.trashPath] = byTrashPath[u.trashPath] || []).push(u);
+      }
+      for (const [trashPath, entries] of Object.entries(byTrashPath)) {
+        await query(
+          'UPDATE messages SET folder = $1 WHERE id = ANY($2::uuid[])',
+          [trashPath, entries.map(e => e.id)]
+        );
+      }
+      const withNewUid = trashUpdates.filter(u => u.newUid != null);
+      if (withNewUid.length) {
+        await query(
+          `UPDATE messages SET uid = v.new_uid
+           FROM unnest($1::uuid[], $2::bigint[]) AS v(id, new_uid)
+           WHERE messages.id = v.id`,
+          [withNewUid.map(u => u.id), withNewUid.map(u => u.newUid)]
+        );
       }
     }
-    for (const { accountId, path, total, unread } of Object.values(srcTotals)) {
-      adjustFolderCounts(accountId, path, -total, -unread);
+
+    const allSucceeded = [...succeededNoTrash, ...trashUpdates.map(u => u.id)];
+    if (allSucceeded.length) {
+      const succeededSet = new Set(allSucceeded);
+      const srcTotals = {};
+      const trashTotals = {};
+      for (const msg of owned) {
+        if (!succeededSet.has(msg.id)) continue;
+        const key = `${msg.account_id}:${msg.folder}`;
+        if (!srcTotals[key]) srcTotals[key] = { accountId: msg.account_id, path: msg.folder, total: 0, unread: 0 };
+        srcTotals[key].total++;
+        if (!msg.is_read) srcTotals[key].unread++;
+        const trashPath = trashPathByAccount[msg.account_id];
+        if (trashPath && trashPath !== msg.folder) {
+          if (!trashTotals[msg.account_id]) trashTotals[msg.account_id] = { path: trashPath, total: 0, unread: 0 };
+          trashTotals[msg.account_id].total++;
+          if (!msg.is_read) trashTotals[msg.account_id].unread++;
+        }
+      }
+      for (const { accountId, path, total, unread } of Object.values(srcTotals)) {
+        adjustFolderCounts(accountId, path, -total, -unread);
+      }
+      for (const [accountId, { path, total, unread }] of Object.entries(trashTotals)) {
+        adjustFolderCounts(accountId, path, total, unread);
+      }
     }
-    for (const [accountId, { path, total, unread }] of Object.entries(trashTotals)) {
-      adjustFolderCounts(accountId, path, total, unread);
-    }
+    res.json({ ok: true, deleted: allSucceeded });
+  } catch (err) {
+    console.error('bulk-delete error:', err);
+    res.status(500).json({ error: 'Failed to delete messages' });
   }
-  res.json({ ok: true, deleted: allSucceeded });
 });
 
 // Bulk move to folder
@@ -923,76 +928,81 @@ router.post('/messages/bulk-move', async (req, res) => {
     return res.status(400).json({ error: 'Invalid message id format' });
   }
 
-  const result = await query(
-    `SELECT m.*, a.user_id FROM messages m
-     JOIN email_accounts a ON m.account_id = a.id
-     WHERE m.id = ANY($2::uuid[]) AND a.user_id = $1`,
-    [req.session.userId, ids]
-  );
-
-  const owned = result.rows;
-  if (!owned.length) return res.json({ ok: true, moved: [] });
-
-  const byAccount = {};
-  for (const msg of owned) {
-    (byAccount[msg.account_id] = byAccount[msg.account_id] || []).push(msg);
-  }
-
-  const movedIds = [];
-  const uidUpdates = [];
-  for (const [accountId, msgs] of Object.entries(byAccount)) {
-    // Verify the destination folder exists for this account
-    const folderCheck = await query(
-      'SELECT 1 FROM folders WHERE account_id = $1 AND path = $2',
-      [accountId, folder]
+  try {
+    const result = await query(
+      `SELECT m.*, a.user_id FROM messages m
+       JOIN email_accounts a ON m.account_id = a.id
+       WHERE m.id = ANY($2::uuid[]) AND a.user_id = $1`,
+      [req.session.userId, ids]
     );
-    if (!folderCheck.rows.length) {
-      console.warn(`bulk-move: folder "${folder}" not found for account ${accountId}, skipping`);
-      continue;
-    }
-    const accountResult = await query('SELECT * FROM email_accounts WHERE id = $1', [accountId]);
-    const account = accountResult.rows[0];
-    const results = await runInBatches(
-      msgs, 10,
-      msg => imapManager.moveMessage(account, msg.uid, msg.folder, folder)
-    );
-    results.forEach((r, i) => {
-      if (r.status === 'fulfilled') {
-        movedIds.push(msgs[i].id);
-        if (r.value != null) uidUpdates.push({ id: msgs[i].id, newUid: r.value });
-      } else {
-        console.error(`bulk-move IMAP ${msgs[i].id}:`, r.reason.message);
-      }
-    });
-  }
 
-  if (movedIds.length > 0) {
-    await query('UPDATE messages SET folder = $1 WHERE id = ANY($2::uuid[])', [folder, movedIds]);
-    if (uidUpdates.length > 0) {
-      await query(
-        `UPDATE messages SET uid = v.new_uid
-         FROM unnest($1::uuid[], $2::bigint[]) AS v(id, new_uid)
-         WHERE messages.id = v.id`,
-        [uidUpdates.map(u => u.id), uidUpdates.map(u => u.newUid)]
-      );
-    }
-    // Adjust cached counts: decrement source folders, increment the destination.
-    const movedSet = new Set(movedIds);
-    const srcTotals = {};
+    const owned = result.rows;
+    if (!owned.length) return res.json({ ok: true, moved: [] });
+
+    const byAccount = {};
     for (const msg of owned) {
-      if (!movedSet.has(msg.id)) continue;
-      const key = `${msg.account_id}:${msg.folder}`;
-      if (!srcTotals[key]) srcTotals[key] = { accountId: msg.account_id, path: msg.folder, total: 0, unread: 0 };
-      srcTotals[key].total++;
-      if (!msg.is_read) srcTotals[key].unread++;
+      (byAccount[msg.account_id] = byAccount[msg.account_id] || []).push(msg);
     }
-    for (const { accountId, path, total, unread } of Object.values(srcTotals)) {
-      adjustFolderCounts(accountId, path, -total, -unread);
-      adjustFolderCounts(accountId, folder, total, unread);
-    }
-  }
 
-  res.json({ ok: true, moved: movedIds });
+    const movedIds = [];
+    const uidUpdates = [];
+    for (const [accountId, msgs] of Object.entries(byAccount)) {
+      // Verify the destination folder exists for this account
+      const folderCheck = await query(
+        'SELECT 1 FROM folders WHERE account_id = $1 AND path = $2',
+        [accountId, folder]
+      );
+      if (!folderCheck.rows.length) {
+        console.warn(`bulk-move: folder "${folder}" not found for account ${accountId}, skipping`);
+        continue;
+      }
+      const accountResult = await query('SELECT * FROM email_accounts WHERE id = $1', [accountId]);
+      const account = accountResult.rows[0];
+      const results = await runInBatches(
+        msgs, 3,
+        msg => imapManager.moveMessage(account, msg.uid, msg.folder, folder)
+      );
+      results.forEach((r, i) => {
+        if (r.status === 'fulfilled') {
+          movedIds.push(msgs[i].id);
+          if (r.value) uidUpdates.push({ id: msgs[i].id, newUid: r.value });
+        } else {
+          console.error(`bulk-move IMAP ${msgs[i].id}:`, r.reason.message);
+        }
+      });
+    }
+
+    if (movedIds.length > 0) {
+      await query('UPDATE messages SET folder = $1 WHERE id = ANY($2::uuid[])', [folder, movedIds]);
+      if (uidUpdates.length > 0) {
+        await query(
+          `UPDATE messages SET uid = v.new_uid
+           FROM unnest($1::uuid[], $2::bigint[]) AS v(id, new_uid)
+           WHERE messages.id = v.id`,
+          [uidUpdates.map(u => u.id), uidUpdates.map(u => u.newUid)]
+        );
+      }
+      // Adjust cached counts: decrement source folders, increment the destination.
+      const movedSet = new Set(movedIds);
+      const srcTotals = {};
+      for (const msg of owned) {
+        if (!movedSet.has(msg.id)) continue;
+        const key = `${msg.account_id}:${msg.folder}`;
+        if (!srcTotals[key]) srcTotals[key] = { accountId: msg.account_id, path: msg.folder, total: 0, unread: 0 };
+        srcTotals[key].total++;
+        if (!msg.is_read) srcTotals[key].unread++;
+      }
+      for (const { accountId, path, total, unread } of Object.values(srcTotals)) {
+        adjustFolderCounts(accountId, path, -total, -unread);
+        adjustFolderCounts(accountId, folder, total, unread);
+      }
+    }
+
+    res.json({ ok: true, moved: movedIds });
+  } catch (err) {
+    console.error('bulk-move error:', err);
+    res.status(500).json({ error: 'Failed to move messages' });
+  }
 });
 
 // Bulk archive — moves messages to the archive folder for each account
@@ -1008,95 +1018,100 @@ router.post('/messages/bulk-archive', async (req, res) => {
     return res.status(400).json({ error: 'Invalid message IDs' });
   }
 
-  const result = await query(
-    `SELECT m.*, a.user_id, a.folder_mappings FROM messages m
-     JOIN email_accounts a ON m.account_id = a.id
-     WHERE m.id = ANY($2::uuid[]) AND a.user_id = $1`,
-    [req.session.userId, ids]
-  );
+  try {
+    const result = await query(
+      `SELECT m.*, a.user_id, a.folder_mappings FROM messages m
+       JOIN email_accounts a ON m.account_id = a.id
+       WHERE m.id = ANY($2::uuid[]) AND a.user_id = $1`,
+      [req.session.userId, ids]
+    );
 
-  const owned = result.rows;
-  if (!owned.length) return res.json({ ok: true, archived: [], noArchiveFolder: [] });
+    const owned = result.rows;
+    if (!owned.length) return res.json({ ok: true, archived: [], noArchiveFolder: [] });
 
-  const byAccount = {};
-  for (const msg of owned) {
-    (byAccount[msg.account_id] = byAccount[msg.account_id] || []).push(msg);
-  }
-
-  const archivedIds = [];
-  const noArchiveFolder = [];
-
-  for (const [accountId, msgs] of Object.entries(byAccount)) {
-    // Resolve archive folder: explicit mapping > special_use > name heuristic
-    let archiveFolder = msgs[0].folder_mappings?.archive || null;
-    if (!archiveFolder) {
-      const folderResult = await query(
-        `SELECT path FROM folders WHERE account_id = $1
-         AND (special_use = '\\Archive' OR lower(name) LIKE '%archive%') LIMIT 1`,
-        [accountId]
-      );
-      archiveFolder = folderResult.rows[0]?.path || null;
-    }
-    if (!archiveFolder) {
-      noArchiveFolder.push(accountId);
-      continue;
+    const byAccount = {};
+    for (const msg of owned) {
+      (byAccount[msg.account_id] = byAccount[msg.account_id] || []).push(msg);
     }
 
-    const accountResult = await query('SELECT * FROM email_accounts WHERE id = $1', [accountId]);
-    const account = accountResult.rows[0];
-    for (const msg of msgs) {
-      try {
-        const newUid = await imapManager.moveMessage(account, msg.uid, msg.folder, archiveFolder);
-        archivedIds.push({ id: msg.id, folder: archiveFolder, newUid: newUid ?? null });
-      } catch (err) {
-        console.error(`bulk-archive IMAP ${msg.id}:`, err.message);
+    const archivedIds = [];
+    const noArchiveFolder = [];
+
+    for (const [accountId, msgs] of Object.entries(byAccount)) {
+      // Resolve archive folder: explicit mapping > special_use > name heuristic
+      let archiveFolder = msgs[0].folder_mappings?.archive || null;
+      if (!archiveFolder) {
+        const folderResult = await query(
+          `SELECT path FROM folders WHERE account_id = $1
+           AND (special_use = '\\Archive' OR lower(name) LIKE '%archive%') LIMIT 1`,
+          [accountId]
+        );
+        archiveFolder = folderResult.rows[0]?.path || null;
+      }
+      if (!archiveFolder) {
+        noArchiveFolder.push(accountId);
+        continue;
+      }
+
+      const accountResult = await query('SELECT * FROM email_accounts WHERE id = $1', [accountId]);
+      const account = accountResult.rows[0];
+      for (const msg of msgs) {
+        try {
+          const newUid = await imapManager.moveMessage(account, msg.uid, msg.folder, archiveFolder);
+          archivedIds.push({ id: msg.id, folder: archiveFolder, newUid: newUid || null });
+        } catch (err) {
+          console.error(`bulk-archive IMAP ${msg.id}:`, err.message);
+        }
       }
     }
-  }
 
-  // Update DB folder for successfully archived messages, grouped by destination
-  const byFolder = {};
-  for (const { id, folder, newUid } of archivedIds) {
-    if (!byFolder[folder]) byFolder[folder] = [];
-    byFolder[folder].push({ id, newUid });
-  }
-  for (const [folder, entries] of Object.entries(byFolder)) {
-    const folderIds = entries.map(e => e.id);
-    await query('UPDATE messages SET folder = $1 WHERE id = ANY($2::uuid[])', [folder, folderIds]);
-    const withNewUid = entries.filter(e => e.newUid != null);
-    if (withNewUid.length > 0) {
-      await query(
-        `UPDATE messages SET uid = v.new_uid
-         FROM unnest($1::uuid[], $2::bigint[]) AS v(id, new_uid)
-         WHERE messages.id = v.id`,
-        [withNewUid.map(e => e.id), withNewUid.map(e => e.newUid)]
-      );
+    // Update DB folder for successfully archived messages, grouped by destination
+    const byFolder = {};
+    for (const { id, folder, newUid } of archivedIds) {
+      if (!byFolder[folder]) byFolder[folder] = [];
+      byFolder[folder].push({ id, newUid });
     }
-  }
+    for (const [folder, entries] of Object.entries(byFolder)) {
+      const folderIds = entries.map(e => e.id);
+      await query('UPDATE messages SET folder = $1 WHERE id = ANY($2::uuid[])', [folder, folderIds]);
+      const withNewUid = entries.filter(e => e.newUid != null);
+      if (withNewUid.length > 0) {
+        await query(
+          `UPDATE messages SET uid = v.new_uid
+           FROM unnest($1::uuid[], $2::bigint[]) AS v(id, new_uid)
+           WHERE messages.id = v.id`,
+          [withNewUid.map(e => e.id), withNewUid.map(e => e.newUid)]
+        );
+      }
+    }
 
-  // Adjust cached folder counts: use signed deltas so source and dest share one pass.
-  if (archivedIds.length > 0) {
-    const idToArchiveDest = new Map(archivedIds.map(({ id, folder: dest }) => [id, dest]));
-    const folderDeltas = {}; // key: `${accountId}:${path}` -> { accountId, path, totalDelta, unreadDelta }
-    for (const msg of owned) {
-      const dest = idToArchiveDest.get(msg.id);
-      if (!dest) continue;
-      const wasUnread = !msg.is_read ? 1 : 0;
-      const srcKey = `${msg.account_id}:${msg.folder}`;
-      if (!folderDeltas[srcKey]) folderDeltas[srcKey] = { accountId: msg.account_id, path: msg.folder, totalDelta: 0, unreadDelta: 0 };
-      folderDeltas[srcKey].totalDelta--;
-      folderDeltas[srcKey].unreadDelta -= wasUnread;
-      const dstKey = `${msg.account_id}:${dest}`;
-      if (!folderDeltas[dstKey]) folderDeltas[dstKey] = { accountId: msg.account_id, path: dest, totalDelta: 0, unreadDelta: 0 };
-      folderDeltas[dstKey].totalDelta++;
-      folderDeltas[dstKey].unreadDelta += wasUnread;
+    // Adjust cached folder counts: use signed deltas so source and dest share one pass.
+    if (archivedIds.length > 0) {
+      const idToArchiveDest = new Map(archivedIds.map(({ id, folder: dest }) => [id, dest]));
+      const folderDeltas = {}; // key: `${accountId}:${path}` -> { accountId, path, totalDelta, unreadDelta }
+      for (const msg of owned) {
+        const dest = idToArchiveDest.get(msg.id);
+        if (!dest) continue;
+        const wasUnread = !msg.is_read ? 1 : 0;
+        const srcKey = `${msg.account_id}:${msg.folder}`;
+        if (!folderDeltas[srcKey]) folderDeltas[srcKey] = { accountId: msg.account_id, path: msg.folder, totalDelta: 0, unreadDelta: 0 };
+        folderDeltas[srcKey].totalDelta--;
+        folderDeltas[srcKey].unreadDelta -= wasUnread;
+        const dstKey = `${msg.account_id}:${dest}`;
+        if (!folderDeltas[dstKey]) folderDeltas[dstKey] = { accountId: msg.account_id, path: dest, totalDelta: 0, unreadDelta: 0 };
+        folderDeltas[dstKey].totalDelta++;
+        folderDeltas[dstKey].unreadDelta += wasUnread;
+      }
+      for (const { accountId, path, totalDelta, unreadDelta } of Object.values(folderDeltas)) {
+        adjustFolderCounts(accountId, path, totalDelta, unreadDelta);
+      }
     }
-    for (const { accountId, path, totalDelta, unreadDelta } of Object.values(folderDeltas)) {
-      adjustFolderCounts(accountId, path, totalDelta, unreadDelta);
-    }
-  }
 
-  res.json({ ok: true, archived: archivedIds.map(a => a.id), noArchiveFolder });
+    res.json({ ok: true, archived: archivedIds.map(a => a.id), noArchiveFolder });
+  } catch (err) {
+    console.error('bulk-archive error:', err);
+    res.status(500).json({ error: 'Failed to archive messages' });
+  }
 });
 
 // Snooze a message: move it to a Snoozed IMAP folder and record when to restore it

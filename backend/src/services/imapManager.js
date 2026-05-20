@@ -2077,7 +2077,7 @@ export class ImapManager {
           const result = await client.messageMove(String(uid), toFolder, { uid: true });
           if (result === false) throw new Error('messageMove returned false — server did not confirm move');
           if (result?.uidMap) {
-            newUid = result.uidMap.get(Number(uid)) ?? null;
+            newUid = result.uidMap.get(Number(uid)) || null;
           }
         } finally {
           lock.release();
@@ -2148,7 +2148,7 @@ export class ImapManager {
         try {
           const result = await client.messageMove(String(uid), toFolder, { uid: true });
           if (result === false) throw new Error('messageMove returned false — server did not confirm move');
-          if (result?.uidMap) newUid = result.uidMap.get(Number(uid)) ?? null;
+          if (result?.uidMap) newUid = result.uidMap.get(Number(uid)) || null;
         } finally {
           lock.release();
         }
