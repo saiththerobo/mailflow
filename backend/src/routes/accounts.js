@@ -31,7 +31,7 @@ const SAFE_FIELDS = [
   'imap_host', 'imap_port', 'smtp_host', 'smtp_port',
   'auth_user', 'oauth_provider', 'enabled',
   'last_sync', 'sync_error', 'sort_order', 'folder_mappings',
-  'imap_skip_tls_verify', 'signature', 'created_at',
+  'imap_skip_tls_verify', 'signature', 'server_search_enabled', 'created_at',
 ];
 function safeAccount(row) {
   const obj = Object.fromEntries(SAFE_FIELDS.map(k => [k, row[k]]));
@@ -154,7 +154,7 @@ router.put('/:id', async (req, res) => {
     if (err) return res.status(400).json({ error: `SMTP: ${err}` });
   }
 
-  const allowed = ['name', 'sender_name', 'color', 'enabled', 'auth_user', 'auth_pass', 'sort_order', 'smtp_host', 'smtp_port', 'folder_mappings', 'imap_skip_tls_verify', 'signature'];
+  const allowed = ['name', 'sender_name', 'color', 'enabled', 'auth_user', 'auth_pass', 'sort_order', 'smtp_host', 'smtp_port', 'folder_mappings', 'imap_skip_tls_verify', 'signature', 'server_search_enabled'];
   const sets = [];
   const values = [];
   let i = 1;
@@ -196,6 +196,16 @@ router.put('/:id', async (req, res) => {
       .then(r => { if (r.rows.length) return imapManager.connectAccount(r.rows[0]); })
       .catch(err => console.error(`Failed to reconnect account ${id} after update:`, err.message));
   }
+});
+
+router.post('/:id/index', async (req, res) => {
+  const { id } = req.params;
+  const result = await query('SELECT * FROM email_accounts WHERE id = $1 AND user_id = $2', [id, req.session.userId]);
+  if (!result.rows.length) return res.status(404).json({ error: 'Account not found' });
+  res.json({ ok: true });
+  imapManager.startSnippetIndexer(result.rows[0], true).catch(err =>
+    console.error(`Manual index error for ${result.rows[0].email_address}:`, err.message)
+  );
 });
 
 router.delete('/:id', async (req, res) => {

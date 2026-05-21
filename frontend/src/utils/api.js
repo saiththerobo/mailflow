@@ -87,6 +87,7 @@ export const api = {
   updateAccount: (id, data) => request('PUT', `/accounts/${id}`, data),
   deleteAccount: (id) => request('DELETE', `/accounts/${id}`),
   reconnectAccount: (id) => request('POST', `/accounts/${id}/reconnect`),
+  indexAccount: (id) => request('POST', `/accounts/${id}/index`),
   getFolders: (accountId) => request('GET', `/accounts/${accountId}/folders`),
   getAliases: (accountId) => request('GET', `/accounts/${accountId}/aliases`),
   addAlias: (accountId, data) => request('POST', `/accounts/${accountId}/aliases`, data),

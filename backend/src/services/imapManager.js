@@ -1,6 +1,6 @@
 import { ImapFlow } from 'imapflow';
 import { query } from './db.js';
-import { parseMessage, buildSnippetFromHtml } from './messageParser.js';
+import { parseMessage, buildSnippetFromHtml, htmlToBodyText } from './messageParser.js';
 import { refreshMicrosoftToken } from '../routes/oauth.js';
 import { sanitizeEmail } from './emailSanitizer.js';
 import { logger } from './logger.js';
@@ -189,6 +189,88 @@ function walkStructure(node, results) {
   }
 }
 
+// Given a bodyStructure and a Map of already-fetched part-number → Buffer,
+// fetch any missing text/image parts from client and return { html, text, attachments }.
+// The caller must hold a mailbox lock on the target folder before calling.
+async function extractBodyFromParts(client, uidStr, structure, prefetched) {
+  if (!structure) return { html: null, text: null, attachments: [] };
+
+  const results = { textParts: [], attachments: [], inlineImages: [] };
+  walkStructure(structure, results);
+
+  if (results.textParts.length === 0) {
+    const rootType = (structure.type || '').toLowerCase();
+    results.textParts.push({
+      part: structure.part || '1',
+      type: (rootType === 'text/html' || rootType === 'text/plain' || rootType === 'application/xhtml+xml') ? 'text/html' : 'text/plain',
+      encoding: structure.encoding || '',
+      charset: structure.parameters?.charset || 'utf-8',
+    });
+  }
+
+  const inlineImages = results.inlineImages || [];
+  const needed = [
+    ...new Set([
+      ...results.textParts.map(p => p.part),
+      ...inlineImages.map(p => p.part),
+    ])
+  ].filter(p => !prefetched.has(p));
+
+  if (needed.length > 0) {
+    for await (const msg of client.fetch(uidStr, { uid: true, bodyParts: needed }, { uid: true })) {
+      if (msg.bodyParts) {
+        for (const [k, v] of msg.bodyParts) {
+          if (v != null) prefetched.set(k, v);
+        }
+      }
+    }
+
+    // Per-part retry for any part that came back missing or zero-length from the
+    // batched fetch. Some servers (confirmed on purelymail.com) return a 0-byte
+    // literal for non-empty parts when a sibling part in the same FETCH command
+    // happens to be empty — BODY[2] alone succeeds where BODY[1] BODY[2] did not.
+    for (const part of [...results.textParts, ...inlineImages]) {
+      const existing = prefetched.get(part.part);
+      if (existing && existing.length > 0) continue;
+      try {
+        for await (const msg of client.fetch(uidStr, { uid: true, bodyParts: [part.part] }, { uid: true })) {
+          const v = msg.bodyParts?.get(part.part);
+          if (v && v.length > 0) prefetched.set(part.part, v);
+        }
+      } catch (_) {}
+    }
+  }
+
+  let html = null, text = null;
+  for (const part of results.textParts) {
+    const buf = prefetched.get(part.part);
+    if (!buf) continue;
+    const decoded = decodeBody(buf, part.encoding, part.charset);
+    if (part.type === 'text/html' && !html) html = decoded;
+    else if (part.type === 'text/plain' && !text) text = decoded;
+  }
+
+  // Replace cid: references in HTML with data: URIs so inline images render
+  // inside the sandboxed srcdoc iframe.
+  if (html && inlineImages.length > 0) {
+    for (const img of inlineImages) {
+      if (!img.cid) continue;
+      const buf = prefetched.get(img.part);
+      if (!buf) continue;
+      const enc = (img.encoding || '').toLowerCase();
+      const b64 = enc === 'base64'
+        ? buf.toString('ascii').replace(/\s/g, '')
+        : buf.toString('base64');
+      const dataUri = `data:${img.type};base64,${b64}`;
+      // cid: refs appear with and without angle brackets — match both.
+      const escapedCid = img.cid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      html = html.replace(new RegExp(`cid:<?${escapedCid}>?`, 'gi'), dataUri);
+    }
+  }
+
+  return { html, text, attachments: results.attachments };
+}
+
 // Extract a human-readable message from an imapflow error.
 // imapflow command failures have a structured .response object; fall back to .message.
 function extractImapError(err) {
@@ -230,6 +312,7 @@ const PROVIDERS = {
     fetchBody: false,
     pushesFlags: false,
     snippetIndex: false,
+    serverSearch: true,  // supports X-GM-RAW server-side search via IMAP
     speculativeFetch: false,
     skipFolderPatterns: ['all mail', '[gmail]/starred', '[gmail]/important'],
     // [Gmail] is a namespace container — not a selectable mailbox. It must be
@@ -241,6 +324,7 @@ const PROVIDERS = {
     fetchBody: false,
     pushesFlags: true,
     snippetIndex: true,
+    serverSearch: false,
     speculativeFetch: false,
     skipFolderPatterns: [],
     skipFolderNames: [],
@@ -251,6 +335,7 @@ const PROVIDERS = {
     fetchBody: false,
     pushesFlags: true,
     snippetIndex: true,
+    serverSearch: false,
     speculativeFetch: true,
     skipFolderPatterns: [],
     skipFolderNames: [],
@@ -260,6 +345,7 @@ const PROVIDERS = {
     fetchBody: false,
     pushesFlags: true,
     snippetIndex: true,
+    serverSearch: false,
     speculativeFetch: true,
     skipFolderPatterns: [],
     skipFolderNames: [],
@@ -269,6 +355,7 @@ const PROVIDERS = {
     fetchBody: false,
     pushesFlags: true,
     snippetIndex: true,
+    serverSearch: false,
     speculativeFetch: true,
     skipFolderPatterns: [],
     skipFolderNames: [],
@@ -283,6 +370,7 @@ export function providerProfile(account) {
   if (host.includes('.outlook.com') || host.includes('.hotmail.com') || host.includes('.live.com') || (account.oauth_provider === 'microsoft')) return PROVIDERS.microsoft;
   return PROVIDERS.generic;
 }
+
 
 // Per-account connection pool for body fetches — avoids TLS handshake on every click
 const connectionPools = new Map(); // accountId -> { clients: [], waiting: [] }
@@ -1645,9 +1733,9 @@ export class ImapManager {
   // after backfill completes, and also at connect time for existing accounts.
   // Skipped for providers that throttle body fetches too aggressively to run at scale.
   // Processes most-recent messages first so the most useful results are indexed quickly.
-  async startSnippetIndexer(account) {
+  async startSnippetIndexer(account, forceIndex = false) {
     const cfg = providerProfile(account);
-    if (!cfg.snippetIndex) return;
+    if (!cfg.snippetIndex && !forceIndex) return;
 
     if (this.snippetIndexerRunning.has(account.id)) return;
     this.snippetIndexerRunning.add(account.id);
@@ -1663,13 +1751,13 @@ export class ImapManager {
     try {
       // Check if there's anything to index before opening a connection
       const countResult = await query(
-        "SELECT count(*) FROM messages WHERE account_id = $1 AND (snippet IS NULL OR snippet = '')",
+        "SELECT count(*) FROM messages WHERE account_id = $1 AND (snippet IS NULL OR snippet = '' OR body_text IS NULL)",
         [account.id]
       );
       const totalMissing = parseInt(countResult.rows[0].count);
       if (totalMissing === 0) return;
 
-      logger.debug(`Snippet indexer: ${logAccount(account)} has ${totalMissing} messages without snippets`);
+      logger.debug(`Snippet indexer: ${logAccount(account)} has ${totalMissing} messages without snippet/body_text`);
 
       const openClient = async () => {
         if (siClient) { try { await siClient.logout(); } catch (_) {} siClient = null; }
@@ -1688,17 +1776,21 @@ export class ImapManager {
 
       await openClient();
 
-      // Get distinct folders that have unindexed messages
+      // Get distinct folders that have messages still needing indexing
       const foldersResult = await query(
         `SELECT folder, count(*) as cnt FROM messages
-         WHERE account_id = $1 AND (snippet IS NULL OR snippet = '')
+         WHERE account_id = $1 AND (snippet IS NULL OR snippet = '' OR body_text IS NULL)
          GROUP BY folder ORDER BY cnt DESC`,
         [account.id]
       );
 
+      const { skipFolderPatterns, skipFolderNames } = cfg;
       let batchCount = 0;
       let consecutiveErrors = 0;
       for (const { folder } of foldersResult.rows) {
+        const pathLower = folder.toLowerCase();
+        if (skipFolderNames.some(n => pathLower === n.toLowerCase())) continue;
+        if (skipFolderPatterns.some(pat => pathLower.includes(pat))) continue;
         let done = false;
         while (!done) {
           // Stop if account was deleted
@@ -1723,7 +1815,7 @@ export class ImapManager {
 
           const batchResult = await query(
             `SELECT uid FROM messages
-             WHERE account_id = $1 AND folder = $2 AND (snippet IS NULL OR snippet = '')
+             WHERE account_id = $1 AND folder = $2 AND (snippet IS NULL OR snippet = '' OR body_text IS NULL)
              ORDER BY date DESC LIMIT $3`,
             [account.id, folder, batchSize]
           );
@@ -1733,18 +1825,43 @@ export class ImapManager {
           try {
             const lock = await siClient.getMailboxLock(folder);
             try {
-              for await (const msg of siClient.fetch(uids.join(','), {
-                uid: true, envelope: true, bodyStructure: true,
-                bodyParts: ['1', '1.1', '1.2'],
-              }, { uid: true })) {
+              // Collect all messages from the batch fetch, then process each one.
+              // Speculative providers: prefetch BODY_PREFETCH_PARTS in one round-trip;
+              // extractBodyFromParts fetches only the parts that weren't covered.
+              // Non-speculative providers (e.g. Gmail): fetch bodyStructure only,
+              // then extractBodyFromParts fetches the exact parts needed per message.
+              const batchQuery = cfg.speculativeFetch
+                ? { uid: true, envelope: true, bodyStructure: true, bodyParts: BODY_PREFETCH_PARTS }
+                : { uid: true, envelope: true, bodyStructure: true };
+
+              const fetched = [];
+              for await (const msg of siClient.fetch(uids.join(','), batchQuery, { uid: true })) {
+                fetched.push({
+                  uid: msg.uid,
+                  bodyStructure: msg.bodyStructure,
+                  prefetched: new Map(msg.bodyParts || []),
+                  msg,
+                });
+              }
+
+              for (const item of fetched) {
                 try {
-                  const parsed = await parseMessage(msg);
-                  if (parsed.snippet) {
+                  const parsed = await parseMessage(item.msg);
+                  const body = await extractBodyFromParts(siClient, String(item.uid), item.bodyStructure, item.prefetched);
+                  const bodyText = body.text
+                    ? sanitizeStr(body.text).substring(0, 100 * 1024)
+                    : body.html
+                      ? sanitizeStr(htmlToBodyText(body.html))
+                      : null;
+                  const snippet = sanitizeStr(parsed.snippet) || '';
+                  if (snippet || bodyText) {
                     await query(
-                      `UPDATE messages SET snippet = $1
+                      `UPDATE messages
+                       SET snippet   = CASE WHEN (snippet IS NULL OR snippet = '') AND $1 != '' THEN $1 ELSE snippet END,
+                           body_text = CASE WHEN body_text IS NULL AND $5::text IS NOT NULL THEN $5::text ELSE body_text END
                        WHERE account_id = $2 AND uid = $3 AND folder = $4
-                         AND (snippet IS NULL OR snippet = '')`,
-                      [sanitizeStr(parsed.snippet), account.id, msg.uid, folder]
+                         AND (snippet IS NULL OR snippet = '' OR body_text IS NULL)`,
+                      [snippet, account.id, item.uid, folder, bodyText]
                     );
                   }
                 } catch (_) {}
@@ -1972,85 +2089,7 @@ export class ImapManager {
           throw new Error('Command failed');
         }
 
-        const results = { textParts: [], attachments: [], inlineImages: [] };
-        walkStructure(structure, results);
-
-        // Handle single-part root node (no childNodes, type is the content type)
-        if (results.textParts.length === 0) {
-          const rootType = (structure.type || '').toLowerCase();
-          results.textParts.push({
-            part: structure.part || '1',
-            type: (rootType === 'text/html' || rootType === 'text/plain' || rootType === 'application/xhtml+xml') ? 'text/html' : 'text/plain',
-            encoding: structure.encoding || '',
-            charset: structure.parameters?.charset || 'utf-8',
-          });
-        }
-
-        attachments = results.attachments;
-
-        // Fetch any text/image parts not already obtained from the speculative fetch
-        const inlineImages = results.inlineImages || [];
-        const needed = [
-          ...new Set([
-            ...results.textParts.map(p => p.part),
-            ...inlineImages.map(p => p.part),
-          ])
-        ].filter(p => !prefetched.has(p));
-
-        if (needed.length > 0) {
-          // Batched fetch for parts not already available.
-          for await (const msg of client.fetch(uidStr, { uid: true, bodyParts: needed }, { uid: true })) {
-            if (msg.bodyParts) {
-              for (const [k, v] of msg.bodyParts) {
-                if (v != null) prefetched.set(k, v);
-              }
-            }
-          }
-
-          // Per-part individual retry for any text/image part that came back missing or
-          // zero-length from the batched fetch.  Some IMAP servers (confirmed on
-          // purelymail.com) return a 0-byte literal for non-empty parts when one sibling
-          // part in the same FETCH command happens to be empty — the batched
-          // BODY[1] BODY[2] response is malformed, but BODY[2] alone works correctly.
-          const individualParts = [...results.textParts, ...(results.inlineImages || [])];
-          for (const part of individualParts) {
-            const existing = prefetched.get(part.part);
-            if (existing && existing.length > 0) continue; // already have content
-            try {
-              for await (const msg of client.fetch(uidStr, { uid: true, bodyParts: [part.part] }, { uid: true })) {
-                const v = msg.bodyParts?.get(part.part);
-                if (v && v.length > 0) prefetched.set(part.part, v);
-              }
-            } catch (_) {} // don't let a single part failure block others
-          }
-        }
-
-        for (const part of results.textParts) {
-          const buf = prefetched.get(part.part);
-          if (!buf) continue;
-          const decoded = decodeBody(buf, part.encoding, part.charset);
-          if (part.type === 'text/html' && !html) html = decoded;
-          else if (part.type === 'text/plain' && !text) text = decoded;
-        }
-
-        // Step 3: replace cid: references in HTML with data: URIs so inline
-        // images render inside the sandboxed srcdoc iframe
-        if (html && inlineImages.length > 0) {
-          for (const img of inlineImages) {
-            if (!img.cid) continue;
-            const buf = prefetched.get(img.part);
-            if (!buf) continue;
-            const enc = (img.encoding || '').toLowerCase();
-            const b64 = enc === 'base64'
-              ? buf.toString('ascii').replace(/\s/g, '')
-              : buf.toString('base64');
-            const dataUri = `data:${img.type};base64,${b64}`;
-            // cid: refs appear with and without angle brackets — match both.
-            // e.g.  src="cid:abc123"  and  src="cid:<abc123>"
-            const escapedCid = img.cid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            html = html.replace(new RegExp(`cid:<?${escapedCid}>?`, 'gi'), dataUri);
-          }
-        }
+        ({ html, text, attachments } = await extractBodyFromParts(client, uidStr, structure, prefetched));
       } finally {
         lock.release();
       }
@@ -2559,5 +2598,92 @@ export class ImapManager {
       );
       delay += 200;
     }
+  }
+
+  // Server-side full-text search for Gmail accounts using the X-GM-RAW IMAP extension.
+  // Delegates to Gmail's own search index — no body downloads required, works across
+  // all labels including messages never opened in this client.
+  // Results are merged with local DB data where the message has already been synced.
+  async searchServer(account, rawQuery, limit = 50) {
+    if (!account.server_search_enabled) return [];
+    // Locate the All Mail folder — the superset of every Gmail message.
+    // The path is locale-dependent ('Tous les messages', 'Alle Nachrichten', etc.)
+    // so we match on the RFC 6154 special-use attribute first, path pattern as fallback.
+    const allMailResult = await query(
+      `SELECT path FROM folders WHERE account_id = $1
+       AND (special_use ILIKE '%All%' OR path ILIKE '%All Mail%' OR path ILIKE '%Tous les messages%'
+            OR path ILIKE '%Alle Nachrichten%' OR path ILIKE '%Tutti i messaggi%')
+       ORDER BY CASE WHEN special_use ILIKE '%All%' THEN 0 ELSE 1 END
+       LIMIT 1`,
+      [account.id]
+    );
+    const allMailPath = allMailResult.rows[0]?.path || '[Gmail]/All Mail';
+
+    return withFreshClient(account, async (client) => {
+      let lock;
+      try {
+        lock = await client.getMailboxLock(allMailPath);
+      } catch (err) {
+        console.warn(`Server search: cannot select ${allMailPath} for ${logAccount(account)}: ${err.message}`);
+        return [];
+      }
+      try {
+        const allUids = await client.search({ gmailraw: rawQuery }, { uid: true });
+        if (!allUids.length) return [];
+
+        // IMAP UIDs are monotonically increasing — highest = most recent
+        const topUids = allUids.slice(-Math.min(limit, allUids.length));
+
+        // Fetch envelopes for display data (lightweight — no bodies transferred)
+        const envelopes = [];
+        for await (const msg of client.fetch(topUids.join(','), {
+          uid: true, envelope: true, flags: true,
+        }, { uid: true })) {
+          envelopes.push(msg);
+        }
+        if (!envelopes.length) return [];
+
+        // Match against local DB by Message-ID header (folder-independent, stable across labels)
+        const messageIds = envelopes.map(m => m.envelope?.messageId).filter(Boolean);
+        const dbRows = messageIds.length
+          ? (await query(
+              `SELECT m.id, m.message_id, m.uid, m.folder, m.snippet,
+                      m.is_read, m.is_starred, m.has_attachments
+               FROM messages m
+               WHERE m.account_id = $1 AND m.message_id = ANY($2) AND m.is_deleted = false`,
+              [account.id, messageIds]
+            )).rows
+          : [];
+        const dbByMsgId = new Map(dbRows.map(r => [r.message_id, r]));
+
+        // Build result rows: DB-enriched where already synced, envelope-only where not
+        return envelopes.reverse().map(msg => {
+          const env = msg.envelope || {};
+          const from = env.from?.[0] || {};
+          const db = dbByMsgId.get(env.messageId) || {};
+          return {
+            id: db.id || null,
+            uid: db.uid ?? msg.uid,
+            folder: db.folder || allMailPath,
+            message_id: env.messageId || null,
+            subject: env.subject || '',
+            from_name: from.name || from.mailbox || '',
+            from_email: from.mailbox && from.host ? `${from.mailbox}@${from.host}` : '',
+            date: env.date || null,
+            snippet: db.snippet || '',
+            is_read: db.is_read ?? msg.flags?.has('\\Seen') ?? false,
+            is_starred: db.is_starred ?? msg.flags?.has('\\Flagged') ?? false,
+            has_attachments: db.has_attachments ?? false,
+            account_id: account.id,
+            account_name: account.name,
+            account_email: account.email_address,
+            account_color: account.color,
+            _remote: !db.id,
+          };
+        });
+      } finally {
+        lock.release();
+      }
+    });
   }
 }

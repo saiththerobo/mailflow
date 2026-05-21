@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { query } from '../services/db.js';
 import { requireAuth } from '../middleware/auth.js';
+import { imapManager } from '../index.js';
+import { providerProfile } from '../services/imapManager.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -53,6 +55,10 @@ function parseSearchQuery(raw) {
   return { ops, terms };
 }
 
+// Server-side search timeout — must exceed imapflow's 10s pool overflow so the
+// pool has time to hand back a connection before we give up.
+const SERVER_SEARCH_TIMEOUT_MS = 12000;
+
 router.get('/', searchLimiter, async (req, res) => {
   const { q, accountId, limit = 50, offset = 0 } = req.query;
   const trimmed = (q || '').trim();
@@ -60,16 +66,36 @@ router.get('/', searchLimiter, async (req, res) => {
   if (trimmed.length > 500) return res.status(400).json({ error: 'Search query too long' });
 
   const accountsResult = await query(
-    'SELECT id FROM email_accounts WHERE user_id = $1 AND enabled = true',
+    'SELECT id, imap_host, name, email_address, color, server_search_enabled FROM email_accounts WHERE user_id = $1 AND enabled = true',
     [req.session.userId]
   );
-  const userAccountIds = accountsResult.rows.map(r => r.id);
+  const userAccounts = accountsResult.rows;
+  const userAccountIds = userAccounts.map(r => r.id);
   if (!userAccountIds.length) return res.json({ messages: [] });
 
   const targetIds = accountId && userAccountIds.includes(accountId)
     ? [accountId] : userAccountIds;
+  const targetAccounts = userAccounts.filter(a => targetIds.includes(a.id));
+  const serverSearchAccounts = targetAccounts.filter(a => providerProfile(a).serverSearch);
 
   const cap = Math.max(1, Math.min(parseInt(limit) || 50, 200));
+
+  // Kick off server-side search immediately so it runs in parallel with the local query.
+  // For supported providers (e.g. Gmail X-GM-RAW), searches the provider's own index —
+  // no body downloads required, works on all messages regardless of local sync state.
+  const remoteSearchPromise = serverSearchAccounts.length
+    ? Promise.all(
+        serverSearchAccounts.map(acc =>
+          Promise.race([
+            imapManager.searchServer(acc, trimmed, cap),
+            new Promise(resolve => setTimeout(() => resolve([]), SERVER_SEARCH_TIMEOUT_MS)),
+          ]).catch(err => {
+            console.warn(`Server search error for ${acc.email_address}:`, err.message);
+            return [];
+          })
+        )
+      ).then(results => results.flat())
+    : Promise.resolve([]);
   const { ops, terms } = parseSearchQuery(trimmed);
 
   const conditions = [];
@@ -131,32 +157,44 @@ router.get('/', searchLimiter, async (req, res) => {
         OR m.from_email ILIKE $${likeIdx}
         OR m.subject ILIKE $${likeIdx}
         OR m.search_vector @@ plainto_tsquery('english', $${ftsIdx})
-        OR to_tsvector('english', coalesce(m.body_text,'')) @@ plainto_tsquery('english', $${ftsIdx})
       )`);
   }
-
-  if (!conditions.length) return res.json({ messages: [], query: q });
 
   const off = Math.max(0, parseInt(offset) || 0);
   params.push(cap);
   params.push(off);
 
   try {
-    const result = await query(`
-      SELECT
-        m.id, m.uid, m.folder, m.subject, m.from_name, m.from_email,
-        m.date, m.snippet, m.is_read, m.is_starred, m.has_attachments, m.account_id,
-        a.name as account_name, a.email_address as account_email, a.color as account_color
-      FROM messages m
-      JOIN email_accounts a ON m.account_id = a.id
-      WHERE m.account_id = ANY($1)
-        AND m.is_deleted = false
-        AND ${conditions.join('\n        AND ')}
-      ORDER BY m.date DESC
-      LIMIT $${p} OFFSET $${p + 1}
-    `, params);
+    // Run local FTS and provider server-side search in parallel
+    const localPromise = conditions.length
+      ? query(`
+          SELECT
+            m.id, m.uid, m.folder, m.message_id, m.subject, m.from_name, m.from_email,
+            m.date, m.snippet, m.is_read, m.is_starred, m.has_attachments, m.account_id,
+            a.name as account_name, a.email_address as account_email, a.color as account_color
+          FROM messages m
+          JOIN email_accounts a ON m.account_id = a.id
+          WHERE m.account_id = ANY($1)
+            AND m.is_deleted = false
+            AND ${conditions.join('\n            AND ')}
+          ORDER BY m.date DESC
+          LIMIT $${p} OFFSET $${p + 1}
+        `, params)
+      : Promise.resolve({ rows: [] });
 
-    res.json({ messages: result.rows, query: q });
+    const [localResult, remoteResults] = await Promise.all([localPromise, remoteSearchPromise]);
+
+    // Merge: remote results already present in local results (matched by Message-ID)
+    // are omitted to avoid duplicates. Local results take precedence since they have full
+    // metadata (id, snippet, etc.) while remote-only rows may have partial data.
+    const localMsgIds = new Set(localResult.rows.map(r => r.message_id).filter(Boolean));
+    const newFromRemote = remoteResults.filter(r => r.message_id && !localMsgIds.has(r.message_id));
+
+    const messages = [...localResult.rows, ...newFromRemote]
+      .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
+      .slice(0, cap);
+
+    res.json({ messages, query: q });
   } catch (err) {
     console.error('Search error:', err);
     res.status(500).json({ error: 'Search failed' });

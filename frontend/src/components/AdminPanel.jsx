@@ -49,6 +49,7 @@ const PRESETS = {
 // ─── Account Form (Add or Edit) ───────────────────────────────────────────────
 function AccountForm({ initial, onSave, onCancel }) {
   const { t } = useTranslation();
+  const { addNotification } = useStore();
   const isEdit = !!initial?.id;
   const [form, setForm] = useState(initial || {
     name: '', email_address: '', color: '#6366f1', protocol: 'imap',
@@ -60,8 +61,21 @@ function AccountForm({ initial, onSave, onCancel }) {
   const [error, setError] = useState('');
   const [showPass, setShowPass] = useState(false);
   const [selectedPreset, setSelectedPreset] = useState(null);
+  const [indexing, setIndexing] = useState(false);
 
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
+
+  const handleIndexAll = async () => {
+    setIndexing(true);
+    try {
+      await api.indexAccount(initial.id);
+      addNotification({ type: 'success', title: t('admin.accounts.indexStarted') });
+    } catch (err) {
+      addNotification({ type: 'error', title: err.message });
+    } finally {
+      setIndexing(false);
+    }
+  };
 
   const handlePreset = (key) => {
     const p = PRESETS[key];
@@ -227,6 +241,67 @@ function AccountForm({ initial, onSave, onCancel }) {
         onChange={val => set('signature', val)}
       />
 
+      {isEdit && (
+        <>
+          <div style={{ height: 1, background: 'var(--border-subtle)', margin: '16px 0' }} />
+          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 10, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+            {t('admin.accounts.searchSection')}
+          </div>
+
+          {form.imap_host === 'imap.gmail.com' && (
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '12px 14px', borderRadius: 8, marginBottom: 14,
+              background: 'var(--bg-tertiary)', border: '1px solid var(--border-subtle)',
+            }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>
+                  {t('admin.accounts.serverSearch')}
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 2 }}>
+                  {t('admin.accounts.serverSearchDesc')}
+                </div>
+              </div>
+              <button
+                onClick={() => set('server_search_enabled', form.server_search_enabled === false ? true : false)}
+                style={{
+                  width: 44, height: 24, borderRadius: 12,
+                  background: form.server_search_enabled === false ? 'var(--bg-elevated)' : 'var(--accent)',
+                  border: `1px solid ${form.server_search_enabled === false ? 'var(--border)' : 'var(--accent)'}`,
+                  cursor: 'pointer', position: 'relative', transition: 'all 0.2s', flexShrink: 0,
+                }}
+              >
+                <div style={{
+                  position: 'absolute', top: 3, left: form.server_search_enabled === false ? 3 : 22,
+                  width: 16, height: 16, borderRadius: '50%',
+                  background: 'white', transition: 'left 0.2s',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                }} />
+              </button>
+            </div>
+          )}
+
+          <div>
+            <button
+              onClick={handleIndexAll}
+              disabled={indexing}
+              style={{
+                padding: '8px 14px', background: 'var(--bg-tertiary)',
+                border: '1px solid var(--border)', borderRadius: 8,
+                color: indexing ? 'var(--text-tertiary)' : 'var(--text-primary)',
+                fontSize: 13, cursor: indexing ? 'not-allowed' : 'pointer',
+                opacity: indexing ? 0.7 : 1,
+              }}
+            >
+              {indexing ? t('admin.accounts.indexing') : t('admin.accounts.indexAll')}
+            </button>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 6 }}>
+              {t('admin.accounts.indexAllDesc')}
+            </div>
+          </div>
+        </>
+      )}
+
       {error && (
         <div style={{
           padding: '10px 14px', background: 'rgba(248,113,113,0.1)',
@@ -284,7 +359,7 @@ function AccountsTab() {
   };
 
   const handleEdit = async (form) => {
-    const updates = { name: form.name, sender_name: form.sender_name || null, color: form.color, smtp_host: form.smtp_host, smtp_port: form.smtp_port, signature: form.signature || null };
+    const updates = { name: form.name, sender_name: form.sender_name || null, color: form.color, smtp_host: form.smtp_host, smtp_port: form.smtp_port, signature: form.signature || null, server_search_enabled: form.server_search_enabled !== false };
     if (form.auth_pass) updates.auth_pass = form.auth_pass;
     if (form.auth_user) updates.auth_user = form.auth_user;
     await api.updateAccount(editTarget.id, updates);
