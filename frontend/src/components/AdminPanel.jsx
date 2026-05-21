@@ -62,6 +62,35 @@ function AccountForm({ initial, onSave, onCancel }) {
   const [showPass, setShowPass] = useState(false);
   const [selectedPreset, setSelectedPreset] = useState(null);
   const [indexing, setIndexing] = useState(false);
+  const [indexStatus, setIndexStatus] = useState(null);
+  const indexPollRef = useRef(null);
+
+  const fetchIndexStatus = async () => {
+    if (!initial?.id) return;
+    try {
+      const s = await api.getIndexStatus(initial.id);
+      setIndexStatus(s);
+      return s;
+    } catch (_) {}
+  };
+
+  useEffect(() => {
+    if (isEdit) fetchIndexStatus();
+  }, [isEdit]);
+
+  useEffect(() => {
+    if (indexing) {
+      indexPollRef.current = setInterval(async () => {
+        const s = await fetchIndexStatus();
+        if (s && s.indexed >= s.total) {
+          clearInterval(indexPollRef.current);
+        }
+      }, 3000);
+    } else {
+      clearInterval(indexPollRef.current);
+    }
+    return () => clearInterval(indexPollRef.current);
+  }, [indexing]);
 
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
 
@@ -74,6 +103,7 @@ function AccountForm({ initial, onSave, onCancel }) {
       addNotification({ type: 'error', title: err.message });
     } finally {
       setIndexing(false);
+      fetchIndexStatus();
     }
   };
 
@@ -282,20 +312,27 @@ function AccountForm({ initial, onSave, onCancel }) {
           )}
 
           <div>
-            <button
-              onClick={handleIndexAll}
-              disabled={indexing}
-              style={{
-                padding: '8px 14px', background: 'var(--bg-tertiary)',
-                border: '1px solid var(--border)', borderRadius: 8,
-                color: indexing ? 'var(--text-tertiary)' : 'var(--text-primary)',
-                fontSize: 13, cursor: indexing ? 'not-allowed' : 'pointer',
-                opacity: indexing ? 0.7 : 1,
-              }}
-            >
-              {indexing ? t('admin.accounts.indexing') : t('admin.accounts.indexAll')}
-            </button>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+              <button
+                onClick={handleIndexAll}
+                disabled={indexing}
+                style={{
+                  padding: '8px 14px', background: 'var(--bg-tertiary)',
+                  border: '1px solid var(--border)', borderRadius: 8,
+                  color: indexing ? 'var(--text-tertiary)' : 'var(--text-primary)',
+                  fontSize: 13, cursor: indexing ? 'not-allowed' : 'pointer',
+                  opacity: indexing ? 0.7 : 1,
+                }}
+              >
+                {indexing ? t('admin.accounts.indexing') : t('admin.accounts.indexAll')}
+              </button>
+              {indexStatus && (
+                <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+                  {indexStatus.indexed} / {indexStatus.total} {t('admin.accounts.indexed')}
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
               {t('admin.accounts.indexAllDesc')}
             </div>
           </div>

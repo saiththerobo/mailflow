@@ -208,6 +208,19 @@ router.post('/:id/index', async (req, res) => {
   );
 });
 
+router.get('/:id/index-status', async (req, res) => {
+  const { id } = req.params;
+  const result = await query(
+    `SELECT COUNT(*) AS total, COUNT(m.body_text) AS indexed
+     FROM messages m
+     JOIN email_accounts a ON m.account_id = a.id
+     WHERE m.account_id = $1 AND a.user_id = $2 AND m.is_deleted = false`,
+    [id, req.session.userId]
+  );
+  const { total, indexed } = result.rows[0];
+  res.json({ total: parseInt(total), indexed: parseInt(indexed) });
+});
+
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;

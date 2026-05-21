@@ -379,6 +379,7 @@
       "indexAllDesc": "Download and index email bodies locally for offline full-text search. May use significant data on large accounts.",
       "indexing": "Indexing…",
       "indexStarted": "Indexing started in background",
+      "indexed": "indexed",
       "saveChanges": "Save changes",
       "addAccount": "Add account",
       "saving": "Saving…",

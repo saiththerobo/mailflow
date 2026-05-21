@@ -88,6 +88,7 @@ export const api = {
   deleteAccount: (id) => request('DELETE', `/accounts/${id}`),
   reconnectAccount: (id) => request('POST', `/accounts/${id}/reconnect`),
   indexAccount: (id) => request('POST', `/accounts/${id}/index`),
+  getIndexStatus: (id) => request('GET', `/accounts/${id}/index-status`),
   getFolders: (accountId) => request('GET', `/accounts/${accountId}/folders`),
   getAliases: (accountId) => request('GET', `/accounts/${accountId}/aliases`),
   addAlias: (accountId, data) => request('POST', `/accounts/${accountId}/aliases`, data),
