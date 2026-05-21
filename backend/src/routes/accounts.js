@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { query } from '../services/db.js';
 import { requireAuth } from '../middleware/auth.js';
 import { imapManager } from '../index.js';
+import { providerProfile } from '../services/imapManager.js';
 import { encrypt } from '../services/encryption.js';
 import { sanitizeSignature } from '../services/emailSanitizer.js';
 import { validateHost } from '../services/hostValidation.js';
@@ -210,12 +211,24 @@ router.post('/:id/index', async (req, res) => {
 
 router.get('/:id/index-status', async (req, res) => {
   const { id } = req.params;
-  const result = await query(
-    `SELECT COUNT(*) AS total, COUNT(m.body_text) AS indexed
-     FROM messages m
-     JOIN email_accounts a ON m.account_id = a.id
-     WHERE m.account_id = $1 AND a.user_id = $2 AND m.is_deleted = false`,
+  const acctResult = await query(
+    'SELECT * FROM email_accounts WHERE id = $1 AND user_id = $2',
     [id, req.session.userId]
+  );
+  if (!acctResult.rows.length) return res.status(404).json({ error: 'Account not found' });
+
+  const { skipFolderPatterns, skipFolderNames } = providerProfile(acctResult.rows[0]);
+
+  // Mirror the same folder exclusions as the snippet indexer so the total
+  // only counts messages that are actually eligible for indexing.
+  const patConditions = skipFolderPatterns.map((_, i) => `LOWER(m.folder) NOT LIKE $${i + 2}`);
+  const nameConditions = skipFolderNames.map((_, i) => `LOWER(m.folder) != $${skipFolderPatterns.length + i + 2}`);
+  const whereClause = ['m.account_id = $1', 'm.is_deleted = false', ...patConditions, ...nameConditions].join(' AND ');
+  const params = [id, ...skipFolderPatterns.map(p => `%${p}%`), ...skipFolderNames.map(n => n.toLowerCase())];
+
+  const result = await query(
+    `SELECT COUNT(*) AS total, COUNT(m.body_text) AS indexed FROM messages m WHERE ${whereClause}`,
+    params
   );
   const { total, indexed } = result.rows[0];
   res.json({ total: parseInt(total), indexed: parseInt(indexed) });
