@@ -63,34 +63,32 @@ function AccountForm({ initial, onSave, onCancel }) {
   const [selectedPreset, setSelectedPreset] = useState(null);
   const [indexing, setIndexing] = useState(false);
   const [indexStatus, setIndexStatus] = useState(null);
-  const indexPollRef = useRef(null);
+  const pollActiveRef = useRef(false);
 
   const fetchIndexStatus = async () => {
-    if (!initial?.id) return;
+    if (!initial?.id) return null;
     try {
       const s = await api.getIndexStatus(initial.id);
       setIndexStatus(s);
       return s;
-    } catch (_) {}
+    } catch (_) { return null; }
   };
 
   useEffect(() => {
     if (isEdit) fetchIndexStatus();
+    return () => { pollActiveRef.current = false; };
   }, [isEdit]);
 
-  useEffect(() => {
-    if (indexing) {
-      indexPollRef.current = setInterval(async () => {
-        const s = await fetchIndexStatus();
-        if (s && s.indexed >= s.total) {
-          clearInterval(indexPollRef.current);
-        }
-      }, 3000);
-    } else {
-      clearInterval(indexPollRef.current);
-    }
-    return () => clearInterval(indexPollRef.current);
-  }, [indexing]);
+  const startPolling = () => {
+    pollActiveRef.current = true;
+    const tick = async () => {
+      if (!pollActiveRef.current) return;
+      const s = await fetchIndexStatus();
+      if (s && s.indexed < s.total) setTimeout(tick, 3000);
+      else pollActiveRef.current = false;
+    };
+    setTimeout(tick, 3000);
+  };
 
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
 
@@ -99,11 +97,11 @@ function AccountForm({ initial, onSave, onCancel }) {
     try {
       await api.indexAccount(initial.id);
       addNotification({ type: 'success', title: t('admin.accounts.indexStarted') });
+      startPolling();
     } catch (err) {
       addNotification({ type: 'error', title: err.message });
     } finally {
       setIndexing(false);
-      fetchIndexStatus();
     }
   };
 
